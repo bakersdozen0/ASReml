@@ -1,7 +1,6 @@
-
 # 
-#### CONTROL PANEL (Change these for your specific project) ####
-#
+# 0. CONTROL PANEL (Change these for your specific project) #### 
+# 
 project_name  <- "Brecon_59_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
@@ -9,38 +8,25 @@ csv_file      <- paste0(project_name, ".csv")
 # Path to ASReml Standalone (Usually standard across company machines)
 asreml_path   <- "C:/Program Files/ASReml4/bin/asreml.exe"
 
-#### THEORETICALLY, nothing beyond this should need to be edited for any project!  
-
-#
-### Library and set up: ####
-#
+# 
+# 1. SETUP & LIBRARIES (Do not edit below this line)
+# 
 library(here)
-library(asreml)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
 
-# Read raw data - ensure trait columns are treated as numeric
-raw_data <- read.csv("Brecon_59_S.csv", stringsAsFactors = FALSE)
-
-as_file <- "Brecon_59_S.as"
-
-asreml_path <- "C:/Program Files/ASReml4/bin/asreml.exe"
-asreml_exe <- shQuote(asreml_path) # Properly handles the space in "Program Files"
+asreml_exe <- shQuote(asreml_path) 
+raw_data <- read.csv(csv_file, stringsAsFactors = FALSE)
 
 # --- DYNAMIC REGEX TRAIT SCRAPER WITH GUARD RAIL ---
 as_text <- paste(readLines(as_file), collapse = " ")
-# Find all potential traits (AlphaNumeric_Digits)
 found_traits <- unique(unlist(str_extract_all(as_text, "\\b[A-Za-z0-9]+_[0-9]+\\b")))
-
-# GUARD RAIL: Only keep things that are actually columns in your CSV
 traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 
-## "Guardrail" in place because the experiment title was being dragged in as a trait
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
-#Save all ASReml outputs to separate directory; 
 out_dir <- "Analyses"
 if(!dir.exists(out_dir)) {
   dir.create(out_dir)
@@ -50,14 +36,12 @@ if(!dir.exists(out_dir)) {
 base_name <- gsub("\\.as$", "", as_file) 
 out_asr <- paste0(base_name, ".asr")
 out_yht <- paste0(base_name, ".yht")
-out_sln <- paste0(base_name, ".sln") # Added this just in case you want the solutions too!
+out_sln <- paste0(base_name, ".sln") 
 
-# Models to loop through (matches your !PART numbers)
 models_to_run <- c("1" = "Design", "2" = "Design+", "3" = "Spatial AR1")
+master_results_list <- list()
 
-master_results <- list()
-
-# --- NEW: Calculate Block Boundaries for the Black Outlines ---
+# Calculate Block Boundaries for the Black Outlines
 block_bounds <- raw_data %>%
   filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block)) %>%
   group_by(Block) %>%
@@ -70,9 +54,9 @@ block_bounds <- raw_data %>%
 
 ppgmap_colors <- c("darkblue", "blue", "cyan", "green", "yellow", "orange", "red", "darkred")
 
-
-
-### EXECUTE::: ####
+# 
+# 2. Execution section ####
+# 
 for (trait in traits_to_test) {
   cat("\n========================================\nProcessing:", trait, "\n")
   
@@ -193,6 +177,9 @@ for (trait in traits_to_test) {
   }
 }
 
+#
+# 3. EXPORT FINAL MASTER TABLE ####
+#
 if(length(master_results_list) > 0) {
   final_table <- bind_rows(master_results_list) %>% 
     group_by(Trait, Model, Term) %>% slice_tail(n = 1) %>% ungroup() %>%
