@@ -18,3 +18,11 @@
 *.vco
 *.pin
 *.rsv
+*.ask
+*.msv
+*.tmp
+*.tsv
+*.veo
+*.vvp
+*.xml
+fort.*
