@@ -1,18 +1,28 @@
-######## ASReml R is not cooporating in the license activation arena; let's try using R as the text parser
-## and asreml SA as the engine: 
 
+# 
+#### CONTROL PANEL (Change these for your specific project) ####
+#
+project_name  <- "Brecon_59_S"
+as_file       <- paste0(project_name, ".as")
+csv_file      <- paste0(project_name, ".csv")
+
+# Path to ASReml Standalone (Usually standard across company machines)
+asreml_path   <- "C:/Program Files/ASReml4/bin/asreml.exe"
+
+#### THEORETICALLY, nothing beyond this should need to be edited for any project!  
+
+#
+### Library and set up: ####
+#
 library(here)
 library(asreml)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
 
-# 1. Setup
 # Read raw data - ensure trait columns are treated as numeric
 raw_data <- read.csv("Brecon_59_S.csv", stringsAsFactors = FALSE)
 
-traits_to_test <- c("Dbhob_28")
-# other testers; "Dbhob_28", "Dbhub_28", "Drs_28", "Bte_28", "Dre_28"
 as_file <- "Brecon_59_S.as"
 
 asreml_path <- "C:/Program Files/ASReml4/bin/asreml.exe"
@@ -26,6 +36,7 @@ found_traits <- unique(unlist(str_extract_all(as_text, "\\b[A-Za-z0-9]+_[0-9]+\\
 # GUARD RAIL: Only keep things that are actually columns in your CSV
 traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 
+## "Guardrail" in place because the experiment title was being dragged in as a trait
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
@@ -84,7 +95,6 @@ for (trait in traits_to_test) {
     suppressWarnings(file.remove(out_asr, out_yht, out_sln))
     suppressWarnings(file.remove(list.files(pattern = paste0("^", base_name, "\\.(msv|veo|ask|tmp|tsv)$"))))
     
-    # SILENCED COMMAND
     command <- paste(asreml_exe, "-n", as_file, part, trait, "1.2 > NUL 2>&1")
     shell(command, wait = TRUE)
     
@@ -106,9 +116,10 @@ for (trait in traits_to_test) {
       }
     }
     
-    # B. Process Maps
-    sln <- read.table(out_sln, skip = 1, fill = TRUE, stringsAsFactors = FALSE)
+    # B. Process Maps (CRITICAL FIX: colClasses forces 'Level' to remain text)
+    sln <- read.table(out_sln, skip = 1, fill = TRUE, stringsAsFactors = FALSE, colClasses = c("character", "character", "numeric", "numeric"))
     colnames(sln) <- c("Term", "Level", "Estimate", "SE")
+    
     yht <- read.table(out_yht, skip = 1)
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
@@ -116,18 +127,31 @@ for (trait in traits_to_test) {
     
     if (part == "1") {
       block_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
-      map_data <- map_data %>% left_join(block_eff, by = c("Block" = "Level")) %>%
+      map_data <- map_data %>% 
+        mutate(Block_key = as.character(Block)) %>%
+        left_join(block_eff, by = c("Block_key" = "Level")) %>%
         mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, Estimate))
       sol_title <- "2. Design (Block Solutions)"
+      
     } else if (part == "2") {
-      b_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate); r_eff <- sln %>% filter(Term == "Block.Prow") %>% select(Level, Estimate); p_eff <- sln %>% filter(Term == "Block.Ppos") %>% select(Level, Estimate)
+      b_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
+      r_eff <- sln %>% filter(Term == "Block.Prow") %>% select(Level, Estimate)
+      p_eff <- sln %>% filter(Term == "Block.Ppos") %>% select(Level, Estimate)
+      
+      # FIX: Build exact matching strings (e.g. 1.001) using sprintf
       map_data <- map_data %>% 
-        left_join(b_eff, by = c("Block" = "Level")) %>% rename(B_est = Estimate) %>%
-        left_join(r_eff, by = c("Prow" = "Level")) %>% rename(R_est = Estimate) %>%
-        left_join(p_eff, by = c("Ppos" = "Level")) %>% rename(P_est = Estimate) %>%
+        mutate(
+          Block_key = as.character(Block),
+          BProw_key = sprintf("%d.%03d", as.integer(Block), as.integer(Prow)),
+          BPpos_key = sprintf("%d.%03d", as.integer(Block), as.integer(Ppos))
+        ) %>%
+        left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(B_est = Estimate) %>%
+        left_join(r_eff, by = c("BProw_key" = "Level")) %>% rename(R_est = Estimate) %>%
+        left_join(p_eff, by = c("BPpos_key" = "Level")) %>% rename(P_est = Estimate) %>%
         mutate(D_Sum = replace_na(B_est,0) + replace_na(R_est,0) + replace_na(P_est,0)) %>%
         mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, D_Sum))
       sol_title <- "3. Design+ (Blk+Row+Col Solutions)"
+      
     } else {
       map_data <- map_data %>% 
         mutate(Trend = ifelse(is.na(.data[[trait]]), NA, yht$Yhat - mean(yht$Yhat, na.rm=TRUE))) %>%
@@ -147,7 +171,10 @@ for (trait in traits_to_test) {
       scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90") +
       scale_y_reverse() + theme_void() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res"))
     
+    # --- ARCHIVE ALL FILES ---
     file.copy(out_asr, file.path(out_dir, paste0(trait, "_", model_name, ".asr")), overwrite = TRUE)
+    if(file.exists(out_sln)) file.copy(out_sln, file.path(out_dir, paste0(trait, "_", model_name, ".sln")), overwrite = TRUE)
+    if(file.exists(out_yht)) file.copy(out_yht, file.path(out_dir, paste0(trait, "_", model_name, ".yht")), overwrite = TRUE)
   }
   
   if(length(res_plots) == 4) {
@@ -168,21 +195,8 @@ for (trait in traits_to_test) {
 
 if(length(master_results_list) > 0) {
   final_table <- bind_rows(master_results_list) %>% 
-    # 1. Clean up duplicates so pivot_wider doesn't create 'list-cols'
-    # We group by the key columns and take only the last (final) value found
-    group_by(Trait, Model, Term) %>%
-    slice_tail(n = 1) %>% 
-    ungroup() %>%
-    # 2. Pivot wide so terms are columns and traits/models are rows
-    pivot_wider(names_from = Term, values_from = Variance) %>% 
-    # 3. Reorder for the 'DesignSpatial' layout
-    select(Trait, Model, LogL, everything()) %>%
-    arrange(Trait, Model)
-  
-  # Write the file to your 'Analyses' folder
+    group_by(Trait, Model, Term) %>% slice_tail(n = 1) %>% ungroup() %>%
+    pivot_wider(names_from = Term, values_from = Variance) %>% arrange(Trait, Model)
   write.csv(final_table, file.path(out_dir, "All_Traits_Variance_Summary.csv"), row.names = FALSE)
-  
-  cat("\nSUCCESS! All data and plots for the discovered traits are in the 'Analyses' folder.\n")
-} else {
-  cat("\n[!] WARNING: No results were captured to save.\n")
+  cat("\nSUCCESS! All traits processed. Check 'Analyses' folder for full archive.\n")
 }
