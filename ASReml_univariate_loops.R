@@ -111,7 +111,12 @@ for (trait in traits_to_test) {
     yht <- read.table(out_yht, skip = 1)
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
-    map_data <- raw_data %>% mutate(Resid = ifelse(is.na(.data[[trait]]), NA, yht$Residual))
+    # Add a 'Record' ID to your raw data matching the row number
+    map_data <- raw_data %>% 
+      mutate(Record = row_number()) %>% 
+      # JOIN perfectly based on the Record number, ignoring order!
+      left_join(yht, by = "Record") %>% 
+      mutate(Resid = ifelse(is.na(.data[[trait]]), NA, Residual))
     
     if (part == "1") {
       block_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
@@ -142,9 +147,15 @@ for (trait in traits_to_test) {
       
     } else {
       map_data <- map_data %>% 
-        mutate(Trend = ifelse(is.na(.data[[trait]]), NA, yht$Yhat - mean(yht$Yhat, na.rm=TRUE))) %>%
-        rename(PlotVal = Trend)
-      sol_title <- paste("4. Total Spatial Trend Correction:", trait)
+        mutate(
+          # Map the smooth spatial surface to the Solutions plot
+          PlotVal = ifelse(is.na(.data[[trait]]), NA, Resid), 
+          
+          # Map the independent genetic/design noise to the Residuals plot 
+          # (Subtracting the mean centers it around 0 for the color scale)
+          Resid = ifelse(is.na(.data[[trait]]), NA, yht$Yhat - mean(yht$Yhat, na.rm=TRUE)) 
+        )
+      sol_title <- paste("4. Spatial Effects Correction:", trait)
     }
     
     sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = PlotVal)) +
