@@ -1,7 +1,9 @@
 # 
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
-project_name  <- "Brecon_59_S"
+
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 18"
+project_name  <- "Kintyre_18_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -17,26 +19,27 @@ library(ggplot2)
 library(patchwork)
 
 asreml_exe <- shQuote(asreml_path) 
-raw_data <- read.csv(csv_file, stringsAsFactors = FALSE)
+raw_data <- read.csv(file.path(trial_folder,csv_file), stringsAsFactors = FALSE)
 
 # --- DYNAMIC REGEX TRAIT SCRAPER WITH GUARD RAIL ---
-as_text <- paste(readLines(as_file), collapse = " ")
+as_text <- paste(readLines(file.path(trial_folder, as_file)), collapse = " ")
 found_traits <- unique(unlist(str_extract_all(as_text, "\\b[A-Za-z0-9]+_[0-9]+\\b")))
 traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
-out_dir <- "Analyses"
+out_dir <- file.path(trial_folder, "Analyses")
 if(!dir.exists(out_dir)) {
   dir.create(out_dir)
-  cat("Created 'Analyses' folder for outputs.\n")
+  cat("Created 'Analyses' folder for outputs in the trial directory.\n")
 }
 
-base_name <- gsub("\\.as$", "", as_file) 
+# Ensure R looks for the outputs inside the trial folder
+base_name <- file.path(trial_folder, project_name) 
 out_asr <- paste0(base_name, ".asr")
 out_yht <- paste0(base_name, ".yht")
-out_sln <- paste0(base_name, ".sln") 
+out_sln <- paste0(base_name, ".sln")
 
 models_to_run <- c("1" = "Design", "2" = "Design+", "3" = "Spatial AR1")
 master_results_list <- list()
@@ -81,10 +84,23 @@ for (trait in traits_to_test) {
     cat("  -> Running", model_name, "... ")
     
     suppressWarnings(file.remove(out_asr, out_yht, out_sln))
-    suppressWarnings(file.remove(list.files(pattern = paste0("^", base_name, "\\.(msv|veo|ask|tmp|tsv)$"))))
+    # Point list.files specifically to the trial folder to clean up junk
+    suppressWarnings(file.remove(list.files(path = trial_folder, pattern = paste0("^", project_name, "\\.(msv|veo|ask|tmp|tsv)$"), full.names = TRUE)))
     
-    command <- paste(asreml_exe, "-n", as_file, part, trait, "1.2 > NUL 2>&1")
+    # 1. Save our current location, then step into the Shared Drive
+    original_wd <- getwd()
+    setwd(trial_folder)
+   
+    # 2. Build the command WITH the silent flag (> NUL 2>&1)
+    command <- paste(asreml_exe, "-n", paste0(project_name, ".as"), part, trait, "1.2 > NUL 2>&1")
+    
+    # Print the command to the console for tracking
+    cat("  -> Command:", command, "\n")
+    
+    # 3. Run ASReml silently
     shell(command, wait = TRUE)
+    # 3. Step back to our local R project directory
+    setwd(original_wd)
     
     if(!file.exists(out_asr)) { cat("FAILED\n"); next }
     asr_lines <- readLines(out_asr)
