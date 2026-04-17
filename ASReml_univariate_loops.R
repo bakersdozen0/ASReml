@@ -72,7 +72,14 @@ for (trait in traits_to_test) {
   cat("\n========================================\nProcessing:", trait, "\n")
   
   raw_data[[trait]] <- suppressWarnings(as.numeric(as.character(raw_data[[trait]])))
+  
+  # Reset plot lists and design model values for next trait 
   res_plots <- list(); sol_plots <- list(); trait_variance_list <- list()
+  res_plots <- list(); sol_plots <- list(); trait_variance_list <- list()
+  
+  # NEW: Reset the baselines so a failed model doesn't borrow the previous trait's math
+  design_Ve <- NA 
+  design_logL <- NA
   
   # --- PANEL 1: RAW DATA ---
   raw_map <- ggplot(raw_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = .data[[trait]])) +
