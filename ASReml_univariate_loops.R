@@ -114,7 +114,12 @@ for (trait in traits_to_test) {
     
     # A. Scrape Variances
     logl_val <- as.numeric(str_extract(tail(grep("LogL=", asr_lines, value = TRUE), 1), "(?<=LogL=\\s)[-0-9.]+"))
-    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Family_id", "uni\\(Crosstype,2\\)", "units","Tree")
+    
+    # UPGRADE: Added regex to catch AR1/COR spatial parameters
+    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Family_id", "uni\\(Crosstype,2\\)", "units", "Tree", "Prow.*ar1", "Ppos.*ar1", "Prow.*cor", "Ppos.*cor")
+    
+    current_model_vars <- list() # Store just this model's terms temporarily
+    
     for(t in terms) {
       line <- grep(paste0("^\\s*", t, "\\s+"), asr_lines, value = TRUE)
       if(length(line) > 0) {
@@ -122,7 +127,33 @@ for (trait in traits_to_test) {
         df_row <- data.frame(Trait=trait, Model=model_name, Term=gsub("\\\\", "", t), Variance=val)
         trait_variance_list[[length(trait_variance_list) + 1]] <- df_row
         master_results_list[[length(master_results_list) + 1]] <- df_row %>% mutate(LogL=logl_val)
+        current_model_vars[[length(current_model_vars) + 1]] <- df_row
       }
+    }
+    
+    current_vars_df <- bind_rows(current_model_vars)
+    
+    # CAPTURE THE BASELINES FROM THE DESIGN MODEL (Part 1)
+    if (part == "1") {
+      design_logL <- logl_val
+      if ("units" %in% current_vars_df$Term) {
+        design_Ve <- current_vars_df %>% filter(Term == "units") %>% pull(Variance) %>% .[1]
+      } else {
+        design_Ve <- 1 # Failsafe to prevent division by zero
+      }
+    }
+    
+    # BUILD THE METRICS SUBTITLE FOR THE MAPS
+    d_logL <- round(logl_val - design_logL, 2)
+    curr_Ve <- current_vars_df %>% filter(Term == "units") %>% pull(Variance) %>% round(3) %>% .[1]
+    
+    metrics_subtitle <- paste0("dLogL: ", d_logL, " | Ve: ", curr_Ve)
+    
+    # Add spatial auto-correlations to the subtitle if it's the spatial model
+    if (part == "3") {
+      ar_row <- current_vars_df %>% filter(grepl("Prow.*(ar1|cor)", Term)) %>% pull(Variance) %>% round(3) %>% .[1]
+      ar_col <- current_vars_df %>% filter(grepl("Ppos.*(ar1|cor)", Term)) %>% pull(Variance) %>% round(3) %>% .[1]
+      metrics_subtitle <- paste0(metrics_subtitle, " | AR-Row: ", ifelse(is.na(ar_row), "NA", ar_row), " | AR-Col: ", ifelse(is.na(ar_col), "NA", ar_col))
     }
     
     # B. Process Maps (CRITICAL FIX: colClasses forces 'Level' to remain text)
@@ -182,14 +213,14 @@ for (trait in traits_to_test) {
       geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
       scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", n.breaks=10, guide = guide_colorbar(barheight = 15)) +
       geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + theme_void() + coord_fixed() + labs(title = sol_title)
+      scale_y_reverse() + theme_void() + coord_fixed() + labs(title = sol_title, subtitle = metrics_subtitle)
     
     res_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = Resid)) +
       geom_tile(color = "black", size = 0.05) + 
       geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
       scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", n.breaks=10,guide = guide_colorbar(barheight = 15)) +
       geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + theme_void() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res: ",trait))
+      scale_y_reverse() + theme_void() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res: ",trait), subtitle = metrics_subtitle)    
     
     # --- ARCHIVE ALL FILES ---
     file.copy(out_asr, file.path(out_dir, paste0(trait, "_", model_name, ".asr")), overwrite = TRUE)
@@ -204,11 +235,17 @@ for (trait in traits_to_test) {
   
   if(length(trait_variance_list) > 0) {
     trait_df <- bind_rows(trait_variance_list) %>% 
-      group_by(Model) %>% mutate(Pct = Variance / sum(Variance) * 100) %>% ungroup()
+      # UPGRADE: Scale all variances relative to the Design Model's Ve
+      mutate(Scaled_Var = Variance / design_Ve) %>% 
+      ungroup()
+    
     trait_df$Model <- factor(trait_df$Model, levels = c("Design", "Design+", "Spatial AR1"))
-    bp <- ggplot(trait_df, aes(x = Model, y = Pct, fill = Term)) +
+    
+    bp <- ggplot(trait_df, aes(x = Model, y = Scaled_Var, fill = Term)) +
       geom_col(color = "black") + theme_minimal() + scale_fill_brewer(palette = "Set3") +
-      labs(title = paste("Variance Components:", trait), y = "% Variance") 
+      labs(title = paste("Variance Components:", trait), 
+           subtitle = paste("Scaled relative to Design Ve (", round(design_Ve, 3), ")"),
+           y = "Variance (Proportion of Design Ve)") 
     ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 7, height = 6)
   }
 }
