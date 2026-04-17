@@ -21,6 +21,11 @@ library(patchwork)
 asreml_exe <- shQuote(asreml_path) 
 raw_data <- read.csv(file.path(trial_folder,csv_file), stringsAsFactors = FALSE)
 
+# Lock in the 'data file order' exactly as the PPGVal Sfile step output it.
+# This ensures ASReml's un-indexed .yht residuals will always join flawlessly.
+raw_data <- raw_data %>%
+  mutate(Record = row_number())
+
 # --- DYNAMIC REGEX TRAIT SCRAPER WITH GUARD RAIL ---
 as_text <- paste(readLines(file.path(trial_folder, as_file)), collapse = " ")
 found_traits <- unique(unlist(str_extract_all(as_text, "\\b[A-Za-z0-9]+_[0-9]+\\b")))
@@ -127,10 +132,8 @@ for (trait in traits_to_test) {
     yht <- read.table(out_yht, skip = 1)
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
-    # Add a 'Record' ID to your raw data matching the row number
+    # JOIN perfectly based on the 'data file order' Record index!
     map_data <- raw_data %>% 
-      mutate(Record = row_number()) %>% 
-      # JOIN perfectly based on the Record number, ignoring order!
       left_join(yht, by = "Record") %>% 
       mutate(Resid = ifelse(is.na(.data[[trait]]), NA, Residual))
     
