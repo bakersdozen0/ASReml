@@ -1,4 +1,4 @@
-# 🌲 ASReml-R Spatial Pipeline: The "Distrust & Verify" Protocol
+# 🌲 ASReml-R Spatial Pipeline:
 
 **Overview**
 This pipeline automates the sequential execution, extraction, and visualization of ASReml 4 spatial models (`Design`, `Design+`, and `Spatial AR1`) for forestry progeny trials. 
