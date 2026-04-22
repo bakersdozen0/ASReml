@@ -34,10 +34,6 @@ traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
-### set manually for debugging: 
-traits_to_test <- c("Dm_11")
-
-
 out_dir <- file.path(trial_folder, "Analyses")
 if(!dir.exists(out_dir)) {
   dir.create(out_dir)
