@@ -88,13 +88,20 @@ for (trait in traits_to_test) {
   design_logL <- NA
   
   # --- PANEL 1: RAW DATA ---
+  # NEW: Calculate exact mathematical breaks, but only round the display text
+  force_breaks <- function(x) { seq(min(x, na.rm = TRUE), max(x, na.rm = TRUE), length.out = 5) }
+  format_labels <- function(x) { sprintf("%.2f", x) }
+  
+  
   raw_map <- ggplot(raw_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = .data[[trait]])) +
     geom_tile(color = "black", size = 0.05) + 
     geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-    scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", n.breaks=10) +
-    theme(legend.key.height = unit(1.5, "cm"))+
+    # Apply the forced breaks here
+    scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
+    theme_void() + 
+    theme(legend.key.height = unit(1.5, "cm")) +
     geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-    scale_y_reverse() + theme_void() + coord_fixed() + labs(title = paste("1. Raw Data:", trait))
+    scale_y_reverse() + coord_fixed() + labs(title = "1. Raw Data")
   res_plots[[1]] <- raw_map; sol_plots[[1]] <- raw_map
   
   # --- RUN MODELS ---
@@ -149,9 +156,15 @@ for (trait in traits_to_test) {
         
         term_clean <- gsub("\\\\", "", t)
         
-        # STANDARDIZE THE NAME: Force both to be "Independent Error" for the plot legend
-        if (tolower(term_clean) %in% c("residual", "units")) {
+        # STANDARDIZE THE NAME: Separate Independent Error from Spatial Variance!
+        if (tolower(term_clean) == "units") {
           term_clean <- "Independent Error"
+        } else if (tolower(term_clean) == "residual") {
+          if (part == "3") {
+            term_clean <- "Spatial Variance"
+          } else {
+            term_clean <- "Independent Error"
+          }
         }
         
         df_row <- data.frame(Trait=trait, Model=model_name, Term=term_clean, Variance=val)
@@ -174,104 +187,64 @@ for (trait in traits_to_test) {
       design_Ve <- if(nrow(ve_row) > 0) ve_row %>% pull(Variance) %>% .[1] else 1
     }
     
-    # BUILD THE METRICS SUBTITLE
+    # BUILD THE ADVANCED METRICS SUBTITLE (GWD's Variance Percentages)
     d_logL <- round(logl_val - design_logL, 2)
-    curr_ve_row <- current_vars_df %>% filter(Term == "Independent Error")
-    curr_Ve <- if(nrow(curr_ve_row) > 0) round(curr_ve_row %>% pull(Variance) %>% .[1], 3) else "NA"
+    curr_Ve_raw <- current_vars_df %>% filter(Term == "Independent Error") %>% pull(Variance) %>% .[1]
     
-    metrics_subtitle <- paste0("dLogL: ", d_logL, " | Ve: ", curr_Ve)
+    # Calculate all components as % of Design Ve
+    var_text_list <- current_vars_df %>%
+      mutate(Pct = round((Variance / design_Ve) * 100, 1)) %>%
+      mutate(Text = paste0(Term, ": ", Pct, "%")) %>%
+      pull(Text)
+    
+    # NEW: Collapse them and wrap the text so it forms a neat paragraph!
+    var_string <- str_wrap(paste(var_text_list, collapse = " | "), width = 75)
+    
+    metrics_subtitle <- paste0("dLogL: ", d_logL, " | Raw Ve: ", round(curr_Ve_raw, 3), "\n", var_string)
     
     # Extract AR parameters using ASReml 4's exact AR_R / AR_C model codes
     if (part == "3") {
-      # Hunt for lines containing AR_R, AR_C, or AR1
       ar_lines <- grep("(?i)AR_[RC]|AR1", asr_lines, value = TRUE)
       
       ar_row <- if(length(ar_lines) >= 1) {
         parts <- unlist(strsplit(trimws(ar_lines[1]), "\\s+"))
-        as.numeric(parts[5]) # Sigma is column 5
+        round(as.numeric(parts[5]), 2) # Rounded to 2 sig figs per GWD
       } else "NA"
       
       ar_col <- if(length(ar_lines) >= 2) {
         parts <- unlist(strsplit(trimws(ar_lines[2]), "\\s+"))
-        as.numeric(parts[5]) 
+        round(as.numeric(parts[5]), 2) 
       } else "NA"
       
-      metrics_subtitle <- paste0(metrics_subtitle, " | AR-Row: ", ar_row, " | AR-Col: ", ar_col)
+      metrics_subtitle <- paste0(metrics_subtitle, "\nAR-Row: ", ar_row, "  |  AR-Col: ", ar_col)
     }
     
-    # B. Process Maps (CRITICAL FIX: colClasses forces 'Level' to remain text)
+    # B. Process Maps
     sln <- read.table(out_sln, skip = 1, fill = TRUE, stringsAsFactors = FALSE, colClasses = c("character", "character", "numeric", "numeric"))
     colnames(sln) <- c("Term", "Level", "Estimate", "SE")
     
     yht <- read.table(out_yht, skip = 1)
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
-    #
-    #### EXTRACT FIXED EFFECTS (ORIGIN) AND CALCULATE P-VALUES ####
-    # 
-    
-    # 1. Scrape the Wald F-statistic from the .asr file
-    wald_start <- grep("Wald F statistics", asr_lines, ignore.case = TRUE)
-    p_val_text <- "NA"
-    
-    if(length(wald_start) > 0) {
-      # Look at the 20 lines immediately following the Wald header
-      wald_block <- asr_lines[wald_start[1]:min(length(asr_lines), wald_start[1]+20)]
-      origin_line <- grep("(?i)Origin", wald_block, value = TRUE)
-      
-      if(length(origin_line) > 0) {
-        # Extract all numbers from the Origin line (Code, NumDF, F-inc)
-        nums <- as.numeric(unlist(regmatches(origin_line[1], gregexpr("[0-9.]+", origin_line[1]))))
-        if(length(nums) >= 3) {
-          numDF <- nums[2]
-          F_inc <- nums[3]
-          
-          # Grab the Denominator DF from the LogL line to calculate exact P-value
-          denDF <- as.numeric(str_extract(tail(grep("LogL=", asr_lines, value = TRUE), 1), "[-0-9.]+(?=\\s+df)"))
-          
-          if(!is.na(denDF)) {
-            calc_p <- pf(F_inc, numDF, denDF, lower.tail = FALSE)
-            # Format nicely for the plot title (e.g., < 0.001 or 0.045)
-            p_val_text <- ifelse(calc_p < 0.001, "< 0.001", as.character(round(calc_p, 3)))
-          }
-        }
-      }
-    }
-    
-    # 2. Extract the Origin Solutions directly from the SLN file
-    origin_eff <- sln %>% filter(grepl("(?i)Origin", Term))
-    
-    if(nrow(origin_eff) > 0) {
-      origin_eff <- origin_eff %>%
-        mutate(
-          Trait = trait,
-          Model = model_name,
-          T_value = Estimate / SE,
-          Wald_P_Value = p_val_text # Attach the scraped P-value
-        )
-      # Save to our new master list
-      master_fixed_list[[length(master_fixed_list) + 1]] <- origin_eff
-    }
-    
     # JOIN perfectly based on the 'data file order' Record index!
     map_data <- raw_data %>% 
       left_join(yht, by = "Record") %>% 
       mutate(Resid = ifelse(is.na(.data[[trait]]), NA, Residual))
     
+    # SET TITLES (Stripped of Project and Trait names)
     if (part == "1") {
       block_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
       map_data <- map_data %>% 
         mutate(Block_key = as.character(Block)) %>%
         left_join(block_eff, by = c("Block_key" = "Level")) %>%
         mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, Estimate))
-      sol_title <- paste("2. Design (Block Solutions):",trait)
+      sol_title <- "2. Design (Block Solutions)"
       
     } else if (part == "2") {
       b_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
       r_eff <- sln %>% filter(Term == "Block.Prow") %>% select(Level, Estimate)
       p_eff <- sln %>% filter(Term == "Block.Ppos") %>% select(Level, Estimate)
       
-      # FIX: Build exact matching strings (e.g. 1.001) using sprintf
       map_data <- map_data %>% 
         mutate(
           Block_key = as.character(Block),
@@ -283,36 +256,36 @@ for (trait in traits_to_test) {
         left_join(p_eff, by = c("BPpos_key" = "Level")) %>% rename(P_est = Estimate) %>%
         mutate(D_Sum = replace_na(B_est,0) + replace_na(R_est,0) + replace_na(P_est,0)) %>%
         mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, D_Sum))
-      sol_title <- paste("3. Design+ (Blk+Row+Col Solutions):", trait)
+      sol_title <- "3. Design+ (Blk+Row+Col Solutions)"
       
     } else {
       map_data <- map_data %>% 
         mutate(
-          # Map the smooth spatial surface to the Solutions plot
           PlotVal = ifelse(is.na(.data[[trait]]), NA, Resid), 
-          
-          # Map the independent genetic/design noise to the Residuals plot 
-          # (Subtracting the mean centers it around 0 for the color scale)
           Resid = ifelse(is.na(.data[[trait]]), NA, yht$Yhat - mean(yht$Yhat, na.rm=TRUE)) 
         )
-      sol_title <- paste("4. Spatial Effects Correction:", trait)
+      sol_title <- "4. Spatial Effects Correction"
     }
     
     sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = PlotVal)) +
       geom_tile(color = "black", size = 0.05) + 
       geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", n.breaks=10) +
-      theme(legend.key.height = unit(1.5, "cm"))+
+      # Apply the forced breaks, and remove the buggy guide_colorbar command
+      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
+      theme_void() + 
+      theme(legend.key.height = unit(1.5, "cm"), plot.subtitle = element_text(size = 8)) +
       geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + theme_void() + coord_fixed() + labs(title = sol_title, subtitle = metrics_subtitle)
+      scale_y_reverse() + coord_fixed() + labs(title = sol_title, subtitle = metrics_subtitle)
     
     res_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = Resid)) +
       geom_tile(color = "black", size = 0.05) + 
       geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", n.breaks=10) +
-      theme(legend.key.height = unit(1.5, "cm"))+
+      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
+      theme_void() + 
+      theme(legend.key.height = unit(1.5, "cm"), plot.subtitle = element_text(size = 8)) +
       geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + theme_void() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res: ",trait), subtitle = metrics_subtitle)    
+      scale_y_reverse() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res"), subtitle = metrics_subtitle)
+    
     
     # --- ARCHIVE ALL FILES ---
     file.copy(out_asr, file.path(out_dir, paste0(trait, "_", model_name, ".asr")), overwrite = TRUE)
@@ -320,53 +293,48 @@ for (trait in traits_to_test) {
     if(file.exists(out_yht)) file.copy(out_yht, file.path(out_dir, paste0(trait, "_", model_name, ".yht")), overwrite = TRUE)
   }
   
+  # NEW: Add a Master Annotation Title to the entire figure!
   if(length(res_plots) == 4) {
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.png")), (res_plots[[1]] | res_plots[[2]]) / (res_plots[[3]] | res_plots[[4]]), width = 12, height = 10)
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.png")), (sol_plots[[1]] | sol_plots[[2]]) / (sol_plots[[3]] | sol_plots[[4]]), width = 12, height = 10)
+    master_title <- paste(project_name, "- Trait:", trait)
+    
+    res_assembled <- (res_plots[[1]] | res_plots[[2]]) / (res_plots[[3]] | res_plots[[4]]) +
+      plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.png")), res_assembled, width = 12, height = 10)
+    
+    sol_assembled <- (sol_plots[[1]] | sol_plots[[2]]) / (sol_plots[[3]] | sol_plots[[4]]) +
+      plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.png")), sol_assembled, width = 12, height = 10)
   }
+  
   
   if(length(trait_variance_list) > 0) {
     trait_df <- bind_rows(trait_variance_list) %>% 
-      # Convert to strict Percentage of the Design model's Ve
       mutate(Pct_Var = (Variance / design_Ve) * 100) %>% 
       ungroup()
     
     trait_df$Model <- factor(trait_df$Model, levels = c("Design", "Design+", "Spatial AR1"))
     
+    # 1. EXPLICIT REORDERING: Make Independent Error the LAST level so it plots at the bottom
+    all_terms <- unique(trait_df$Term)
+    other_terms <- setdiff(all_terms, c("Independent Error", "Spatial Variance"))
+    
+    # Lock the order: other terms on top, then Spatial, then Independent Error at the absolute bottom
+    ordered_levels <- c(sort(other_terms), "Spatial Variance", "Independent Error")
+    trait_df$Term <- factor(trait_df$Term, levels = ordered_levels)
+    
     bp <- ggplot(trait_df, aes(x = Model, y = Pct_Var, fill = Term)) +
-      # Reverted to stacked bars!
       geom_col(color = "black") + 
+      geom_hline(yintercept = 100, linetype = "dashed", color = "red", linewidth = 1) +
       theme_minimal() + 
       scale_fill_brewer(palette = "Set3") +
       labs(title = paste("Variance Components:", trait), 
-           subtitle = paste("Scaled relative to Design Ve (", round(design_Ve, 3), ")"),
-           y = "% of Design Ve") +
+           y = paste0("% of Design Ve (", round(design_Ve, 3), ")")) +
+      # Removed the reverse guide—the default will now perfectly match the stack!
       theme(legend.position = "right")
     
     ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 7, height = 6)
   }
-  if(length(master_fixed_list) > 0) {
-    # Filter for just the current trait, and we'll plot the Spatial AR1 model results
-    trait_origin_df <- bind_rows(master_fixed_list) %>% 
-      filter(Trait == trait & Model == "Spatial AR1")
-    
-    if(nrow(trait_origin_df) > 0) {
-      origin_p <- trait_origin_df$Wald_P_Value[1]
-      
-      op_plot <- ggplot(trait_origin_df, aes(x = Level, y = Estimate)) +
-        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-        geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
-        geom_point(size = 3, color = "darkblue") +
-        theme_minimal() +
-        labs(
-          title = paste("Origin Solutions (Spatial AR1):", trait),
-          subtitle = paste("Wald P-value:", origin_p),
-          x = "Origin Level",
-          y = "Solution Estimate (+/- 1 SE)"
-        )
-      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5)
-    }
-  }
+  
   if(length(master_fixed_list) > 0) {
     # 1. Define GWD's Origin Dictionary
     origin_mapping <- c(
@@ -494,7 +462,10 @@ if(length(master_results_list) > 0) {
 # 
 if(length(master_fixed_list) > 0) {
   
-  origin_mapping <- c("1"="WC", "2"="QCI", "3"="SOP", "4"="HG", "5"="Alask", "6"="N Wash", "7"="S Wash", "8"="Oregon")
+  # UPDATED TO MATCH THE PLOT DICTIONARY!
+  origin_mapping <- c("1"="Ro_North_HG", "2"="Ro_North_Unk", "3"="Ro_North_WC", 
+                      "4"="Ro_South_Unk", "5"="Ro_HG", "6"="Ro_Ledmore", 
+                      "7"="Ro_WC", "8"="Ro_Filler")
   
   origin_export <- bind_rows(master_fixed_list) %>%
     mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping)) %>%
