@@ -136,8 +136,8 @@ for (trait in traits_to_test) {
     # A. Scrape Variances
     logl_val <- as.numeric(str_extract(tail(grep("LogL=", asr_lines, value = TRUE), 1), "(?<=LogL=\\s)[-0-9.]+"))
     
-    # Add both "Residual" and "units" to the hunting list
-    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Tree")
+    # Add both "Residual" and "units" to the hunting list, and include Prow/Ppos per GWD
+    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Tree") 
     
     current_model_vars <- list() 
     
@@ -288,6 +288,7 @@ for (trait in traits_to_test) {
     
     
     # --- ARCHIVE ALL FILES ---
+    file.copy(file.path(trial_folder, as_file), file.path(out_dir, as_file), overwrite = TRUE) # NEW: Save the .as file per GWD
     file.copy(out_asr, file.path(out_dir, paste0(trait, "_", model_name, ".asr")), overwrite = TRUE)
     if(file.exists(out_sln)) file.copy(out_sln, file.path(out_dir, paste0(trait, "_", model_name, ".sln")), overwrite = TRUE)
     if(file.exists(out_yht)) file.copy(out_yht, file.path(out_dir, paste0(trait, "_", model_name, ".yht")), overwrite = TRUE)
