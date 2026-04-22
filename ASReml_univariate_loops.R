@@ -34,6 +34,10 @@ traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
+### set manually for debugging: 
+traits_to_test <- c("Dm_11")
+
+
 out_dir <- file.path(trial_folder, "Analyses")
 if(!dir.exists(out_dir)) {
   dir.create(out_dir)
@@ -47,7 +51,9 @@ out_yht <- paste0(base_name, ".yht")
 out_sln <- paste0(base_name, ".sln")
 
 models_to_run <- c("1" = "Design", "2" = "Design+", "3" = "Spatial AR1")
+
 master_results_list <- list()
+master_fixed_list <- list() # NEW: To hold Origin and other fixed effects
 
 # Calculate Block Boundaries for the Black Outlines & Text Labels
 block_bounds <- raw_data %>%
@@ -132,7 +138,7 @@ for (trait in traits_to_test) {
       # Grab all lines that start with the term
       lines <- grep(paste0("^\\s*", t), asr_lines, value = TRUE, ignore.case = TRUE)
       
-      # MASSIVE FIX: Throw away the dummy summary lines that contain the word "effects"!
+      # Throw away the dummy summary lines that contain the word "effects"!
       lines <- lines[!grepl("effects", lines, ignore.case = TRUE)]
       
       if(length(lines) > 0) {
@@ -193,44 +199,59 @@ for (trait in traits_to_test) {
       metrics_subtitle <- paste0(metrics_subtitle, " | AR-Row: ", ar_row, " | AR-Col: ", ar_col)
     }
     
-    # CAPTURE THE BASELINES FROM THE DESIGN MODEL
-    if (part == "1") {
-      design_logL <- logl_val
-      ve_row <- current_vars_df %>% filter(Term == "Independent Error")
-      design_Ve <- if(nrow(ve_row) > 0) ve_row %>% pull(Variance) %>% .[1] else 1
-    }
-    
-    # BUILD THE METRICS SUBTITLE
-    d_logL <- round(logl_val - design_logL, 2)
-    curr_ve_row <- current_vars_df %>% filter(Term == "Independent Error")
-    curr_Ve <- if(nrow(curr_ve_row) > 0) round(curr_ve_row %>% pull(Variance) %>% .[1], 3) else "NA"
-    
-    metrics_subtitle <- paste0("dLogL: ", d_logL, " | Ve: ", curr_Ve)
-    
-    # Extract AR parameters using ASReml 4's exact AR_R / AR_C model codes
-    if (part == "3") {
-      # Hunt for lines containing AR_R, AR_C, or AR1
-      ar_lines <- grep("(?i)AR_[RC]|AR1", asr_lines, value = TRUE)
-      
-      ar_row <- if(length(ar_lines) >= 1) {
-        parts <- unlist(strsplit(trimws(ar_lines[1]), "\\s+"))
-        as.numeric(parts[5]) # Sigma is column 5
-      } else "NA"
-      
-      ar_col <- if(length(ar_lines) >= 2) {
-        parts <- unlist(strsplit(trimws(ar_lines[2]), "\\s+"))
-        as.numeric(parts[5]) 
-      } else "NA"
-      
-      metrics_subtitle <- paste0(metrics_subtitle, " | AR-Row: ", ar_row, " | AR-Col: ", ar_col)
-    }
-    
     # B. Process Maps (CRITICAL FIX: colClasses forces 'Level' to remain text)
     sln <- read.table(out_sln, skip = 1, fill = TRUE, stringsAsFactors = FALSE, colClasses = c("character", "character", "numeric", "numeric"))
     colnames(sln) <- c("Term", "Level", "Estimate", "SE")
     
     yht <- read.table(out_yht, skip = 1)
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
+    
+    #
+    #### EXTRACT FIXED EFFECTS (ORIGIN) AND CALCULATE P-VALUES ####
+    # 
+    
+    # 1. Scrape the Wald F-statistic from the .asr file
+    wald_start <- grep("Wald F statistics", asr_lines, ignore.case = TRUE)
+    p_val_text <- "NA"
+    
+    if(length(wald_start) > 0) {
+      # Look at the 20 lines immediately following the Wald header
+      wald_block <- asr_lines[wald_start[1]:min(length(asr_lines), wald_start[1]+20)]
+      origin_line <- grep("(?i)Origin", wald_block, value = TRUE)
+      
+      if(length(origin_line) > 0) {
+        # Extract all numbers from the Origin line (Code, NumDF, F-inc)
+        nums <- as.numeric(unlist(regmatches(origin_line[1], gregexpr("[0-9.]+", origin_line[1]))))
+        if(length(nums) >= 3) {
+          numDF <- nums[2]
+          F_inc <- nums[3]
+          
+          # Grab the Denominator DF from the LogL line to calculate exact P-value
+          denDF <- as.numeric(str_extract(tail(grep("LogL=", asr_lines, value = TRUE), 1), "[-0-9.]+(?=\\s+df)"))
+          
+          if(!is.na(denDF)) {
+            calc_p <- pf(F_inc, numDF, denDF, lower.tail = FALSE)
+            # Format nicely for the plot title (e.g., < 0.001 or 0.045)
+            p_val_text <- ifelse(calc_p < 0.001, "< 0.001", as.character(round(calc_p, 3)))
+          }
+        }
+      }
+    }
+    
+    # 2. Extract the Origin Solutions directly from the SLN file
+    origin_eff <- sln %>% filter(grepl("(?i)Origin", Term))
+    
+    if(nrow(origin_eff) > 0) {
+      origin_eff <- origin_eff %>%
+        mutate(
+          Trait = trait,
+          Model = model_name,
+          T_value = Estimate / SE,
+          Wald_P_Value = p_val_text # Attach the scraped P-value
+        )
+      # Save to our new master list
+      master_fixed_list[[length(master_fixed_list) + 1]] <- origin_eff
+    }
     
     # JOIN perfectly based on the 'data file order' Record index!
     map_data <- raw_data %>% 
@@ -324,6 +345,67 @@ for (trait in traits_to_test) {
     
     ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 7, height = 6)
   }
+  if(length(master_fixed_list) > 0) {
+    # Filter for just the current trait, and we'll plot the Spatial AR1 model results
+    trait_origin_df <- bind_rows(master_fixed_list) %>% 
+      filter(Trait == trait & Model == "Spatial AR1")
+    
+    if(nrow(trait_origin_df) > 0) {
+      origin_p <- trait_origin_df$Wald_P_Value[1]
+      
+      op_plot <- ggplot(trait_origin_df, aes(x = Level, y = Estimate)) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+        geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
+        geom_point(size = 3, color = "darkblue") +
+        theme_minimal() +
+        labs(
+          title = paste("Origin Solutions (Spatial AR1):", trait),
+          subtitle = paste("Wald P-value:", origin_p),
+          x = "Origin Level",
+          y = "Solution Estimate (+/- 1 SE)"
+        )
+      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5)
+    }
+  }
+  if(length(master_fixed_list) > 0) {
+    # 1. Define GWD's Origin Dictionary
+    origin_mapping <- c(
+      "1" = "Ro_North_HG",
+      "2" = "Ro_North_Unk",
+      "3" = "Ro_North_WC",
+      "4" = "Ro_South_Unk",
+      "5" = "Ro_HG",
+      "6" = "Ro_Ledmore",
+      "7" = "Ro_WC",
+      "8" = "Ro_Filler"
+    )
+    
+    # Filter for just the current trait, and we'll plot the Spatial AR1 model results
+    trait_origin_df <- bind_rows(master_fixed_list) %>% 
+      filter(Trait == trait & Model == "Spatial AR1") %>%
+      # Translate the numeric levels to GWD's text labels, and lock the order!
+      mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping))
+    
+    if(nrow(trait_origin_df) > 0) {
+      origin_p <- trait_origin_df$Wald_P_Value[1]
+      
+      op_plot <- ggplot(trait_origin_df, aes(x = Origin_Name, y = Estimate)) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+        geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
+        geom_point(size = 3, color = "darkblue") +
+        theme_minimal() +
+        labs(
+          title = paste("Origin Solutions (Spatial AR1):", trait),
+          subtitle = paste("Wald P-value:", origin_p),
+          x = "Origin",
+          y = "Solution Estimate (+/- 1 SE)"
+        ) +
+        # Drop empty levels (like SOP) so there isn't a blank gap on the axis
+        scale_x_discrete(drop = TRUE) 
+      
+      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5)
+    }
+  }
 }
 
 # 3. EXPORT FINAL MASTER TABLE (Wide-by-Model with Deltas)
@@ -405,4 +487,20 @@ if(length(master_results_list) > 0) {
   cat("\nSUCCESS! Formatted CSV with Deltas and Percentages saved to 'Analyses'.\n")
 } else {
   cat("\n[!] WARNING: No results were captured to save.\n")
+}
+
+# 
+### 4. EXPORT MASTER FIXED EFFECTS (ORIGIN) TABLE #### 
+# 
+if(length(master_fixed_list) > 0) {
+  
+  origin_mapping <- c("1"="WC", "2"="QCI", "3"="SOP", "4"="HG", "5"="Alask", "6"="N Wash", "7"="S Wash", "8"="Oregon")
+  
+  origin_export <- bind_rows(master_fixed_list) %>%
+    mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping)) %>%
+    select(Trait, Model, Term, Level, Origin_Name, Estimate, SE, T_value, Wald_P_Value) %>%
+    arrange(Trait, Model, Origin_Name)
+  
+  write.csv(origin_export, file.path(out_dir, "All_Traits_Fixed_Effects.csv"), row.names = FALSE, na = "")
+  cat("SUCCESS! Exported Fixed Effects (Origin) table to 'Analyses'.\n")
 }
