@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 18"
-project_name  <- "Kintyre_18_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 17"
+project_name  <- "Kintyre_17_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -92,10 +92,13 @@ for (trait in traits_to_test) {
   design_logL <- NA
   
   # --- PANEL 1: RAW DATA ---
-  # NEW: Calculate exact mathematical breaks, but only round the display text
-  force_breaks <- function(x) { seq(min(x, na.rm = TRUE), max(x, na.rm = TRUE), length.out = 5) }
-  format_labels <- function(x) { sprintf("%.2f", x) }
-  
+  # NEW: Calculate exact mathematical breaks, with a failsafe for empty/NA data
+  force_breaks <- function(x) { 
+    min_val <- min(x, na.rm = TRUE)
+    max_val <- max(x, na.rm = TRUE)
+    if (!is.finite(min_val) || !is.finite(max_val)) return(c(0, 1)) # Failsafe for all NAs
+    seq(min_val, max_val, length.out = 5) 
+  }
   
   raw_map <- ggplot(raw_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = .data[[trait]])) +
     geom_tile(color = "black", size = 0.05) + 
@@ -329,11 +332,11 @@ for (trait in traits_to_test) {
     
     res_assembled <- (res_plots[[1]] | res_plots[[2]]) / (res_plots[[3]] | res_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.png")), res_assembled, width = 12, height = 10)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.png")), res_assembled, width = 12, height = 10,dpi = 600)
     
     sol_assembled <- (sol_plots[[1]] | sol_plots[[2]]) / (sol_plots[[3]] | sol_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.png")), sol_assembled, width = 12, height = 10)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.png")), sol_assembled, width = 12, height = 10,dpi = 600)
   }
   
   
@@ -362,7 +365,7 @@ for (trait in traits_to_test) {
       # Removed the reverse guide—the default will now perfectly match the stack!
       theme(legend.position = "right")
     
-    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 7, height = 6)
+    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 7, height = 6,dpi = 600)
   }
   
   if(length(master_fixed_list) > 0) {
@@ -402,7 +405,7 @@ for (trait in traits_to_test) {
         # Drop empty levels (like SOP) so there isn't a blank gap on the axis
         scale_x_discrete(drop = TRUE) 
       
-      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5)
+      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5,dpi = 600)
     }
   }
 }
