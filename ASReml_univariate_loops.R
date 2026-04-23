@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 17"
-project_name  <- "Kintyre_17_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 18"
+project_name  <- "Kintyre_18_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -219,6 +219,31 @@ for (trait in traits_to_test) {
     sln <- read.table(out_sln, skip = 1, fill = TRUE, stringsAsFactors = FALSE, colClasses = c("character", "character", "numeric", "numeric"))
     colnames(sln) <- c("Term", "Level", "Estimate", "SE")
     
+    # --- EXTRACT ORIGIN SOLUTIONS & WALD P-VALUE ---
+    origin_sln <- sln %>% filter(Term == "Origin")
+    
+    if (nrow(origin_sln) > 0) {
+      # Hunt for the Wald P-value in the .asr file (ANOVA table)
+      wald_lines <- grep("(?i)^\\s*Origin\\s+", asr_lines, value = TRUE)
+      
+      origin_p <- "NA"
+      if(length(wald_lines) > 0) {
+        # Split the line and grab the last column (usually the P-value like "<0.001")
+        parts <- unlist(strsplit(trimws(wald_lines[1]), "\\s+"))
+        origin_p <- tail(parts, 1)
+      }
+      
+      origin_df <- origin_sln %>%
+        mutate(
+          Trait = trait,
+          Model = model_name,
+          T_value = Estimate / SE,
+          Wald_P_Value = origin_p
+        )
+      
+      master_fixed_list[[length(master_fixed_list) + 1]] <- origin_df
+    }
+    
     yht <- read.table(out_yht, skip = 1)
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
@@ -358,6 +383,7 @@ for (trait in traits_to_test) {
         geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
         geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
         geom_point(size = 3, color = "darkblue") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
         theme_minimal() +
         labs(
           title = paste("Origin Solutions (Spatial AR1):", trait),

@@ -3,13 +3,11 @@
 .RData
 .Ruserdata
 Analyses/
-
 # Raw Data
 *.csv
 *.txt
 *.xlsx
 *.dat
-
 # ASReml Output Files (The results from your loops)
 *.asr
 *.sln
