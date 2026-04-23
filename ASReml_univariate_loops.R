@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 18"
-project_name  <- "Kintyre_18_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 17"
+project_name  <- "Kintyre_17_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -17,6 +17,8 @@ library(here)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
+library(flextable)
+library(officer)
 
 asreml_exe <- shQuote(asreml_path) 
 raw_data <- read.csv(file.path(trial_folder,csv_file), stringsAsFactors = FALSE)
@@ -75,10 +77,16 @@ for (trait in traits_to_test) {
   
   raw_data[[trait]] <- suppressWarnings(as.numeric(as.character(raw_data[[trait]])))
   
-  # Reset plot lists and design model values for next trait 
-  res_plots <- list(); sol_plots <- list(); trait_variance_list <- list()
-  res_plots <- list(); sol_plots <- list(); trait_variance_list <- list()
+  # NEW: Create a blank failsafe plot that holds its rigid shape!
+  blank_plot <- ggplot() + 
+    theme_void() + 
+    annotate("text", x = 0.5, y = 0.5, label = "Model Did Not Converge", color = "darkred", fontface = "italic", size = 5) +
+    coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) # Changed from cartesian to fixed!
   
+  # Pre-fill the lists with the blanks so the 4-panel grid never collapses
+  res_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
+  sol_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
+  trait_variance_list <- list()
   # NEW: Reset the baselines so a failed model doesn't borrow the previous trait's math
   design_Ve <- NA 
   design_logL <- NA
@@ -399,7 +407,7 @@ for (trait in traits_to_test) {
   }
 }
 
-# 3. EXPORT FINAL MASTER TABLE (Wide-by-Model with Deltas)
+# 3. EXPORT FINAL MASTER TABLE (Wide-by-Model with Deltas) AND Formatted word document. 
 
 if(length(master_results_list) > 0) {
   
@@ -473,9 +481,60 @@ if(length(master_results_list) > 0) {
   
   final_table <- bind_rows(spaced_list)
   
-  # 8. Export!
-  write.csv(final_table, file.path(out_dir, "All_Traits_Variance_Summary.csv"), row.names = FALSE, na = "")
-  cat("\nSUCCESS! Formatted CSV with Deltas and Percentages saved to 'Analyses'.\n")
+  # 8. EXPORT MACHINE-READABLE LONG CSV
+  df_long_export <- df_base %>%
+    mutate(Trial = project_name) %>%
+    select(Trial, Trait, Model, Term, Variance, LogL) # Perfectly tidy for R/Python/SQL
+  
+  write.csv(df_long_export, file.path(out_dir, "All_Traits_Variance_Summary_Long.csv"), row.names = FALSE, na = "")
+  cat("\nSUCCESS! Machine-readable Long CSV saved to 'Analyses'.\n")
+  # --- NEW: PUBLICATION-READY WORD TABLE ---
+    # 1. Initialize an empty Word document
+  doc <- read_docx()
+  
+  # 2. Split the raw calculated data by trait
+  trait_list <- split(df_calc, df_calc$Trait)
+  
+  for (tr in names(trait_list)) {
+    # 3. Format this specific trait's data
+    df_formatted <- trait_list[[tr]] %>%
+      select(-Trait) %>% # Drop the Trait column since we'll put it in the Word header!
+      mutate(across(starts_with("Pct"), ~ ifelse(is.na(.), "", sprintf("%.1f%%", . * 100)))) %>%
+      mutate(across(where(is.numeric), ~ ifelse(is.na(.), "", sprintf("%.3f", .))))
+    
+    # 4. Build the Flextable for this trait
+    ft <- flextable(df_formatted) %>%
+      theme_booktabs() %>%
+      fontsize(size = 9, part = "all") %>%
+      padding(padding = 3, part = "all") %>%
+      set_header_labels(
+        Variance_Design = "Var\nDesign",
+        `Variance_Design+` = "Var\nDesign+",
+        `Variance_Spatial AR1` = "Var\nSpatial",
+        `Delta_Design+` = "Delta\nDesign+",
+        Delta_Spatial = "Delta\nSpatial",
+        Pct_Design = "%\nDesign",
+        `Pct_Design+` = "%\nDesign+",
+        `Pct_Spatial AR1` = "%\nSpatial",
+        `Pct_Delta_Design+` = "% Delta\nDesign+",
+        Pct_Delta_Spatial = "% Delta\nSpatial"
+      ) %>%
+      autofit() %>%
+      align(j = "Term", align = "left", part = "all") %>%
+      align(j = 2:ncol(df_formatted), align = "center", part = "all")
+    
+    # 5. Add a text header and the table to the Word document
+    doc <- doc %>%
+      body_add_par(paste("Trait:", tr), style = "heading 2") %>% # Adds a clean Word heading
+      body_add_flextable(value = ft, align = "left") %>%
+      body_add_par("", style = "Normal") # Adds a blank line below the table so they don't touch
+  }
+  
+  # 6. Lock in landscape mode and save
+  doc <- doc %>% body_end_section_landscape()
+  print(doc, target = file.path(out_dir, "All_Traits_Variance_Summary_Formatted.docx"))
+  cat("SUCCESS! Formatted Landscape Word tables (split by trait) saved to 'Analyses'.\n")
+  
 } else {
   cat("\n[!] WARNING: No results were captured to save.\n")
 }
