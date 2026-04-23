@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 17"
-project_name  <- "Kintyre_17_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 18"
+project_name  <- "Kintyre_18_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -550,8 +550,11 @@ if(length(master_fixed_list) > 0) {
                       "7"="Ro_WC", "8"="Ro_Filler")
   
   origin_export <- bind_rows(master_fixed_list) %>%
-    mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping)) %>%
-    select(Trait, Model, Term, Level, Origin_Name, Estimate, SE, T_value, Wald_P_Value) %>%
+    mutate(
+      Trial = project_name, # NEW: Add Trial column for future database merges
+      Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping)
+    ) %>%
+    select(Trial, Trait, Model, Term, Level, Origin_Name, Estimate, SE, T_value, Wald_P_Value) %>%
     arrange(Trait, Model, Origin_Name)
   
   write.csv(origin_export, file.path(out_dir, "All_Traits_Fixed_Effects.csv"), row.names = FALSE, na = "")
