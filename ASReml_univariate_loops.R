@@ -7,6 +7,9 @@ project_name  <- "Kintyre_18_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
+# NEW: Change this when running different model testing scenarios!
+run_id        <- "Baseline"
+
 # Path to ASReml Standalone (Usually standard across company machines)
 asreml_path   <- "C:/Program Files/ASReml4/bin/asreml.exe"
 
@@ -37,17 +40,28 @@ traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
-out_dir <- file.path(trial_folder, "Analyses")
-if(!dir.exists(out_dir)) {
-  dir.create(out_dir)
-  cat("Created 'Analyses' folder for outputs in the trial directory.\n")
-}
+traits_to_test <-c("Dre_28","Drs_28")
 
-# Ensure R looks for the outputs inside the trial folder
-base_name <- file.path(trial_folder, project_name) 
-out_asr <- paste0(base_name, ".asr")
-out_yht <- paste0(base_name, ".yht")
-out_sln <- paste0(base_name, ".sln")
+# --- 1. SETUP THE SANDBOX DIRECTORY ---
+sandbox_dir <- file.path(trial_folder, "Analyses", run_id)
+dir.create(sandbox_dir, recursive = TRUE, showWarnings = FALSE)
+cat("Running scenario:", run_id, "| Sandbox:", sandbox_dir, "\n")
+
+# Copy the CSV to the sandbox (Bypasses Fortran string limits)
+file.copy(file.path(trial_folder, csv_file), file.path(sandbox_dir, csv_file), overwrite = TRUE)
+
+# Read the master .as file, strip the messy file paths, and save to Sandbox
+as_lines <- readLines(file.path(trial_folder, as_file), warn = FALSE)
+csv_line_index <- grep("\\.csv", as_lines, ignore.case = TRUE)
+if(length(csv_line_index) > 0) {
+  qualifiers <- sub(".*\\.csv\\s*", "", as_lines[csv_line_index[1]], ignore.case = TRUE)
+  as_lines[csv_line_index[1]] <- paste(csv_file, qualifiers) # Forces local read
+}
+writeLines(as_lines, file.path(sandbox_dir, as_file))
+
+# Step into the Sandbox for the rest of the script
+setwd(sandbox_dir)
+out_dir <- sandbox_dir # Keep out_dir variable so your plot/word exports still work
 
 models_to_run <- c("1" = "Design", "2" = "Design+", "3" = "Spatial AR1")
 
@@ -82,18 +96,17 @@ for (trait in traits_to_test) {
   blank_plot <- ggplot() + 
     theme_void() + 
     annotate("text", x = 0.5, y = 0.5, label = "Model Did Not Converge", color = "darkred", fontface = "italic", size = 5) +
-    coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) # Changed from cartesian to fixed!
+    coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) 
   
   # Pre-fill the lists with the blanks so the 4-panel grid never collapses
   res_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
   sol_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
   trait_variance_list <- list()
-  # NEW: Reset the baselines so a failed model doesn't borrow the previous trait's math
+  
   design_Ve <- NA 
   design_logL <- NA
   
   # --- PANEL 1: RAW DATA ---
-  # NEW: Calculate exact mathematical breaks, with a failsafe for empty/NA data
   force_breaks <- function(x) { 
     min_val <- min(x, na.rm = TRUE)
     max_val <- max(x, na.rm = TRUE)
@@ -101,10 +114,11 @@ for (trait in traits_to_test) {
     seq(min_val, max_val, length.out = 5) 
   }
   
+  format_labels <- function(x) sprintf("%.2f", x)
+  
   raw_map <- ggplot(raw_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = .data[[trait]])) +
     geom_tile(color = "black", size = 0.05) + 
     geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-    # Apply the forced breaks here
     scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
     theme_void() + 
     theme(legend.key.height = unit(1.5, "cm")) +
@@ -117,58 +131,58 @@ for (trait in traits_to_test) {
     model_name <- models_to_run[[part]]
     cat("  -> Running", model_name, "... ")
     
-    suppressWarnings(file.remove(out_asr, out_yht, out_sln))
-    # Point list.files specifically to the trial folder to clean up junk
-    suppressWarnings(file.remove(list.files(path = trial_folder, pattern = paste0("^", project_name, "\\.(msv|veo|ask|tmp|tsv)$"), full.names = TRUE)))
+    # --- 1. EXECUTE ASREML (SILENTLY) ---
+    command <- paste(asreml_exe, "-n", as_file, part, trait, "1.2")
+    system(command, wait = TRUE, ignore.stdout = TRUE, ignore.stderr = TRUE) 
     
-    # 1. Save our current location, then step into the Shared Drive
-    original_wd <- getwd()
-    setwd(trial_folder)
-   
-    # 2. Build the command WITH the silent flag (> NUL 2>&1)
-    command <- paste(asreml_exe, "-n", paste0(project_name, ".as"), part, trait, "1.2 > NUL 2>&1")
+    # --- 2. CHECK CONVERGENCE ---
+    sandbox_asr <- paste0(project_name, ".asr")
+    sandbox_yht <- paste0(project_name, ".yht")
+    sandbox_sln <- paste0(project_name, ".sln")
     
-    # Print the command to the console for tracking
-    cat("  -> Command:", command, "\n")
+    if(!file.exists(sandbox_asr)) { cat("Failed to generate .asr\n"); next }
     
-    # 3. Run ASReml silently
-    shell(command, wait = TRUE)
-    # 3. Step back to our local R project directory
-    setwd(original_wd)
+    asr_lines <- readLines(sandbox_asr, warn = FALSE)
     
-    if(!file.exists(out_asr)) { cat("FAILED\n"); next }
-    asr_lines <- readLines(out_asr)
-    if(!any(grepl("LogL Converged", asr_lines))) { cat("Converge Fail\n"); next }
+    if(!any(grepl("LogL Converged", asr_lines))) { 
+      cat("Converge Fail\n")
+      file.copy(sandbox_asr, paste0(trait, "_", model_name, "_FAILED.asr"), overwrite = TRUE)
+      next 
+    }
     cat("Success\n")
     
+    # --- 3. SAFELY RENAME FILES ---
+    out_asr <- paste0(trait, "_", model_name, ".asr")
+    out_yht <- paste0(trait, "_", model_name, ".yht")
+    out_sln <- paste0(trait, "_", model_name, ".sln")
+    
+    file.copy(sandbox_asr, out_asr, overwrite = TRUE)
+    file.copy(sandbox_yht, out_yht, overwrite = TRUE)
+    if(file.exists(sandbox_sln)) file.copy(sandbox_sln, out_sln, overwrite = TRUE)
+    
     # A. Scrape Variances
-    # Find the last line containing LogL=
     logl_line <- tail(grep("LogL=", asr_lines, value = TRUE), 1)
-    # Extract "LogL=" followed by ANY number of spaces (or none), and then the number
     logl_match <- str_extract(logl_line, "LogL=\\s*[-0-9.]+")
-    # Clean off the "LogL=" text so only the pure number remains
     logl_val <- as.numeric(gsub("LogL=\\s*", "", logl_match))    
-    # Add both "Residual" and "units" to the hunting list, and include Prow/Ppos per GWD
+    
     terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Tree") 
     
     current_model_vars <- list() 
     
+    # --- THE FIX: Isolate the actual Variance Components table! ---
+    model_term_idx <- grep("Model_Term", asr_lines, ignore.case = TRUE)
+    asr_lines_vars <- if (length(model_term_idx) > 0) asr_lines[model_term_idx[1]:length(asr_lines)] else asr_lines
+    
     for(t in terms) {
-      # Grab all lines that start with the term
-      lines <- grep(paste0("^\\s*", t), asr_lines, value = TRUE, ignore.case = TRUE)
-      
-      # Throw away the dummy summary lines that contain the word "effects"!
+      # Search only the isolated bottom table
+      lines <- grep(paste0("^\\s*", t), asr_lines_vars, value = TRUE, ignore.case = TRUE)
       lines <- lines[!grepl("effects", lines, ignore.case = TRUE)]
       
       if(length(lines) > 0) {
         parts <- unlist(strsplit(trimws(lines[1]), "\\s+"))
-        
-        # COLUMN 5 IS SIGMA (The true variance estimate in ASReml 4)
         val <- as.numeric(parts[5]) 
-        
         term_clean <- gsub("\\\\", "", t)
         
-        # STANDARDIZE THE NAME: Separate Independent Error from Spatial Variance!
         if (tolower(term_clean) == "units") {
           term_clean <- "Independent Error"
         } else if (tolower(term_clean) == "residual") {
@@ -181,7 +195,6 @@ for (trait in traits_to_test) {
         
         df_row <- data.frame(Trait=trait, Model=model_name, Term=term_clean, Variance=val)
         
-        # Prevent duplicates if ASReml accidentally prints both
         if (!(term_clean == "Independent Error" && any(sapply(current_model_vars, function(x) x$Term == "Independent Error")))) {
           trait_variance_list[[length(trait_variance_list) + 1]] <- df_row
           master_results_list[[length(master_results_list) + 1]] <- df_row %>% mutate(LogL=logl_val)
@@ -192,35 +205,29 @@ for (trait in traits_to_test) {
     
     current_vars_df <- bind_rows(current_model_vars)
     
-    # CAPTURE THE BASELINES FROM THE DESIGN MODEL
     if (part == "1") {
       design_logL <- logl_val
       ve_row <- current_vars_df %>% filter(Term == "Independent Error")
       design_Ve <- if(nrow(ve_row) > 0) ve_row %>% pull(Variance) %>% .[1] else 1
     }
     
-    # BUILD THE ADVANCED METRICS SUBTITLE (GWD's Variance Percentages)
     d_logL <- round(logl_val - design_logL, 2)
     curr_Ve_raw <- current_vars_df %>% filter(Term == "Independent Error") %>% pull(Variance) %>% .[1]
     
-    # Calculate all components as % of Design Ve
     var_text_list <- current_vars_df %>%
       mutate(Pct = round((Variance / design_Ve) * 100, 1)) %>%
       mutate(Text = paste0(Term, ": ", Pct, "%")) %>%
       pull(Text)
     
-    # NEW: Collapse them and wrap the text so it forms a neat paragraph!
     var_string <- str_wrap(paste(var_text_list, collapse = " | "), width = 75)
-    
     metrics_subtitle <- paste0("dLogL: ", d_logL, " | Raw Ve: ", round(curr_Ve_raw, 3), "\n", var_string)
     
-    # Extract AR parameters using ASReml 4's exact AR_R / AR_C model codes
     if (part == "3") {
       ar_lines <- grep("(?i)AR_[RC]|AR1", asr_lines, value = TRUE)
       
       ar_row <- if(length(ar_lines) >= 1) {
         parts <- unlist(strsplit(trimws(ar_lines[1]), "\\s+"))
-        round(as.numeric(parts[5]), 2) # Rounded to 2 sig figs per GWD
+        round(as.numeric(parts[5]), 2) 
       } else "NA"
       
       ar_col <- if(length(ar_lines) >= 2) {
@@ -231,44 +238,57 @@ for (trait in traits_to_test) {
       metrics_subtitle <- paste0(metrics_subtitle, "\nAR-Row: ", ar_row, "  |  AR-Col: ", ar_col)
     }
     
-    # B. Process Maps
+    # B. Process Maps & Fixed Effects
     sln <- read.table(out_sln, skip = 1, fill = TRUE, stringsAsFactors = FALSE, colClasses = c("character", "character", "numeric", "numeric"))
     colnames(sln) <- c("Term", "Level", "Estimate", "SE")
     
-    # --- EXTRACT ORIGIN SOLUTIONS & WALD P-VALUE ---
-    origin_sln <- sln %>% filter(Term == "Origin")
     
-    if (nrow(origin_sln) > 0) {
-      # Hunt for the Wald P-value in the .asr file (ANOVA table)
-      wald_lines <- grep("(?i)^\\s*Origin\\s+", asr_lines, value = TRUE)
+    # --- NEW: EXTRACT ALL FIXED EFFECTS (ORIGIN & SPATIAL COVARIATES) & WALD P-VALUE ---
+    fixed_terms_to_scrape <- c("Origin", "Edge", "Distright", "Distleft", "Distedge")
+    
+    for (f_term in fixed_terms_to_scrape) {
+      # Use case-insensitive matching to protect against ASReml's weird capitalization
+      term_sln <- sln %>% filter(tolower(Term) == tolower(f_term))
       
-      origin_p <- "NA"
-      if(length(wald_lines) > 0) {
-        # Split the line and grab the last column (usually the P-value like "<0.001")
-        parts <- unlist(strsplit(trimws(wald_lines[1]), "\\s+"))
-        origin_p <- tail(parts, 1)
+      if (nrow(term_sln) > 0) {
+        term_p <- "NA"
+        
+        # 1. Find exactly where the Wald table starts
+        wald_idx <- grep("Wald F statistics", asr_lines, ignore.case = TRUE)
+        
+        if (length(wald_idx) > 0) {
+          # 2. Only search the text from the Wald table downwards
+          wald_section <- asr_lines[wald_idx[1]:length(asr_lines)]
+          
+          # 3. Find the specific line for this term
+          term_line <- grep(paste0("\\b", f_term, "\\b"), wald_section, ignore.case = TRUE, value = TRUE)
+          
+          if (length(term_line) > 0) {
+            # 4. Split by spaces and grab the very last string (the p-value)
+            parts <- unlist(strsplit(trimws(term_line[1]), "\\s+"))
+            term_p <- tail(parts, 1)
+          }
+        }
+        
+        term_df <- term_sln %>%
+          mutate(
+            Trait = trait,
+            Model = model_name,
+            T_value = Estimate / SE,
+            Wald_P_Value = term_p
+          )
+        
+        master_fixed_list[[length(master_fixed_list) + 1]] <- term_df
       }
-      
-      origin_df <- origin_sln %>%
-        mutate(
-          Trait = trait,
-          Model = model_name,
-          T_value = Estimate / SE,
-          Wald_P_Value = origin_p
-        )
-      
-      master_fixed_list[[length(master_fixed_list) + 1]] <- origin_df
     }
     
     yht <- read.table(out_yht, skip = 1)
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
-    # JOIN perfectly based on the 'data file order' Record index!
     map_data <- raw_data %>% 
       left_join(yht, by = "Record") %>% 
       mutate(Resid = ifelse(is.na(.data[[trait]]), NA, Residual))
     
-    # SET TITLES (Stripped of Project and Trait names)
     if (part == "1") {
       block_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
       map_data <- map_data %>% 
@@ -307,7 +327,6 @@ for (trait in traits_to_test) {
     sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = PlotVal)) +
       geom_tile(color = "black", size = 0.05) + 
       geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-      # Apply the forced breaks, and remove the buggy guide_colorbar command
       scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
       theme_void() + 
       theme(legend.key.height = unit(1.5, "cm"), plot.subtitle = element_text(size = 8)) +
@@ -323,15 +342,12 @@ for (trait in traits_to_test) {
       geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
       scale_y_reverse() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res"), subtitle = metrics_subtitle)
     
-    
-    # --- ARCHIVE ALL FILES ---
-    file.copy(file.path(trial_folder, as_file), file.path(out_dir, as_file), overwrite = TRUE) # NEW: Save the .as file per GWD
-    file.copy(out_asr, file.path(out_dir, paste0(trait, "_", model_name, ".asr")), overwrite = TRUE)
-    if(file.exists(out_sln)) file.copy(out_sln, file.path(out_dir, paste0(trait, "_", model_name, ".sln")), overwrite = TRUE)
-    if(file.exists(out_yht)) file.copy(out_yht, file.path(out_dir, paste0(trait, "_", model_name, ".yht")), overwrite = TRUE)
+    # --- 4. CLEAN THE SANDBOX FOR THE NEXT LOOP ---
+    file.remove(sandbox_asr)
+    if(file.exists(sandbox_yht)) file.remove(sandbox_yht)
+    if(file.exists(sandbox_sln)) file.remove(sandbox_sln)
   }
   
-  # NEW: Add a Master Annotation Title to the entire figure!
   if(length(res_plots) == 4) {
     master_title <- paste(project_name, "- Trait:", trait)
     
@@ -344,7 +360,6 @@ for (trait in traits_to_test) {
     ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.svg")), sol_assembled, width = 12, height = 10,dpi = 600)
   }
   
-  
   if(length(trait_variance_list) > 0) {
     trait_df <- bind_rows(trait_variance_list) %>% 
       mutate(Pct_Var = (Variance / design_Ve) * 100) %>% 
@@ -352,11 +367,9 @@ for (trait in traits_to_test) {
     
     trait_df$Model <- factor(trait_df$Model, levels = c("Design", "Design+", "Spatial AR1"))
     
-    # 1. EXPLICIT REORDERING: Make Independent Error the LAST level so it plots at the bottom
     all_terms <- unique(trait_df$Term)
     other_terms <- setdiff(all_terms, c("Independent Error", "Spatial Variance"))
     
-    # Lock the order: other terms on top, then Spatial, then Independent Error at the absolute bottom
     ordered_levels <- c(sort(other_terms), "Spatial Variance", "Independent Error")
     trait_df$Term <- factor(trait_df$Term, levels = ordered_levels)
     
@@ -367,29 +380,21 @@ for (trait in traits_to_test) {
       scale_fill_brewer(palette = "Set3") +
       labs(title = paste("Variance Components:", trait), 
            y = paste0("% of Design Ve (", round(design_Ve, 3), ")")) +
-      # Removed the reverse guide—the default will now perfectly match the stack!
       theme(legend.position = "right")
     
     ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.svg")), bp, width = 7, height = 6,dpi = 600)
   }
   
   if(length(master_fixed_list) > 0) {
-    # 1. Define GWD's Origin Dictionary
     origin_mapping <- c(
-      "1" = "Ro_North_HG",
-      "2" = "Ro_North_Unk",
-      "3" = "Ro_North_WC",
-      "4" = "Ro_South_Unk",
-      "5" = "Ro_HG",
-      "6" = "Ro_Ledmore",
-      "7" = "Ro_WC",
-      "8" = "Ro_Filler"
+      "1" = "Ro_North_HG", "2" = "Ro_North_Unk", "3" = "Ro_North_WC",
+      "4" = "Ro_South_Unk", "5" = "Ro_HG", "6" = "Ro_Ledmore",
+      "7" = "Ro_WC", "8" = "Ro_Filler"
     )
     
-    # Filter for just the current trait, and we'll plot the Spatial AR1 model results
+    # NEW: Plot ONLY Origin so Edge doesn't crash the graph
     trait_origin_df <- bind_rows(master_fixed_list) %>% 
-      filter(Trait == trait & Model == "Spatial AR1") %>%
-      # Translate the numeric levels to GWD's text labels, and lock the order!
+      filter(Trait == trait & Model == "Spatial AR1" & Term == "Origin") %>%
       mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping))
     
     if(nrow(trait_origin_df) > 0) {
@@ -407,7 +412,6 @@ for (trait in traits_to_test) {
           x = "Origin",
           y = "Solution Estimate (+/- 1 SE)"
         ) +
-        # Drop empty levels (like SOP) so there isn't a blank gap on the axis
         scale_x_discrete(drop = TRUE) 
       
       ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.svg")), op_plot, width = 7, height = 5,dpi = 600)
@@ -419,29 +423,24 @@ for (trait in traits_to_test) {
 
 if(length(master_results_list) > 0) {
   
-  # 1. Clean duplicates and base data
   df_base <- bind_rows(master_results_list) %>% 
     group_by(Trait, Model, Term) %>% slice_tail(n = 1) %>% ungroup()
   
-  # 2. Calculate Percentages (Variance / Total Variance per Model)
   df_var <- df_base %>%
     group_by(Trait, Model) %>%
     mutate(
       Total_Var = sum(Variance, na.rm = TRUE),
-      Pct = Variance / Total_Var # Keep as decimal (e.g. 0.31 for 31%) so Excel reads it well
+      Pct = Variance / Total_Var 
     ) %>% 
     ungroup()
   
-  # 3. Format LogL as a "Term" row so it stacks nicely
   df_logl <- df_base %>%
     distinct(Trait, Model, LogL) %>%
     mutate(Term = "LogL", Variance = LogL, Pct = NA) %>%
     select(Trait, Model, Term, Variance, Pct)
   
-  # 4. Combine and Pivot Wide by Model
   df_combined <- bind_rows(df_logl, df_var %>% select(Trait, Model, Term, Variance, Pct))
   
-  # We use backticks to handle the `+` and spaces in model names safely
   df_wide <- df_combined %>%
     pivot_wider(
       names_from = Model, 
@@ -449,14 +448,12 @@ if(length(master_results_list) > 0) {
       names_sep = "_"
     )
   
-  # 5. Safety Check: Ensure columns exist even if a model failed to converge
   expected_cols <- c("Variance_Design", "Variance_Design+", "Variance_Spatial AR1",
                      "Pct_Design", "Pct_Design+", "Pct_Spatial AR1")
   for(col in expected_cols) {
     if(!col %in% colnames(df_wide)) df_wide[[col]] <- NA
   }
   
-  # 6. Calculate Deltas
   df_calc <- df_wide %>%
     mutate(
       `Delta_Design+` = `Variance_Design+` - Variance_Design,
@@ -464,7 +461,6 @@ if(length(master_results_list) > 0) {
       `Pct_Delta_Design+` = `Pct_Design+` - Pct_Design,
       `Pct_Delta_Spatial` = `Pct_Spatial AR1` - `Pct_Design+`
     ) %>%
-    # Order the columns exactly like the Excel image
     select(
       Trait, Term,
       Variance_Design, `Variance_Design+`, `Variance_Spatial AR1`,
@@ -472,45 +468,34 @@ if(length(master_results_list) > 0) {
       Pct_Design, `Pct_Design+`, `Pct_Spatial AR1`,
       `Pct_Delta_Design+`, `Pct_Delta_Spatial`
     ) %>%
-    # Sort so LogL is at the top of each trait block
     arrange(Trait, desc(Term == "LogL"), Term)
   
-  # 7. VISUAL SEPARATION: Insert a blank header row between traits
   trait_list <- split(df_calc, df_calc$Trait)
   spaced_list <- lapply(names(trait_list), function(tr) {
-    # Create an empty row
     blank_row <- df_calc[1, ]
     blank_row[1, ] <- NA
-    # Turn the Trait column into a visual header
     blank_row$Trait <- paste(">>> TRAIT:", tr, "<<<")
-    
     bind_rows(blank_row, trait_list[[tr]])
   })
   
   final_table <- bind_rows(spaced_list)
   
-  # 8. EXPORT MACHINE-READABLE LONG CSV
   df_long_export <- df_base %>%
     mutate(Trial = project_name) %>%
-    select(Trial, Trait, Model, Term, Variance, LogL) # Perfectly tidy for R/Python/SQL
+    select(Trial, Trait, Model, Term, Variance, LogL) 
   
   write.csv(df_long_export, file.path(out_dir, "All_Traits_Variance_Summary_Long.csv"), row.names = FALSE, na = "")
   cat("\nSUCCESS! Machine-readable Long CSV saved to 'Analyses'.\n")
-  # --- NEW: PUBLICATION-READY WORD TABLE ---
-    # 1. Initialize an empty Word document
-  doc <- read_docx()
   
-  # 2. Split the raw calculated data by trait
+  doc <- read_docx()
   trait_list <- split(df_calc, df_calc$Trait)
   
   for (tr in names(trait_list)) {
-    # 3. Format this specific trait's data
     df_formatted <- trait_list[[tr]] %>%
-      select(-Trait) %>% # Drop the Trait column since we'll put it in the Word header!
+      select(-Trait) %>% 
       mutate(across(starts_with("Pct"), ~ ifelse(is.na(.), "", sprintf("%.1f%%", . * 100)))) %>%
       mutate(across(where(is.numeric), ~ ifelse(is.na(.), "", sprintf("%.3f", .))))
     
-    # 4. Build the Flextable for this trait
     ft <- flextable(df_formatted) %>%
       theme_booktabs() %>%
       fontsize(size = 9, part = "all") %>%
@@ -531,14 +516,12 @@ if(length(master_results_list) > 0) {
       align(j = "Term", align = "left", part = "all") %>%
       align(j = 2:ncol(df_formatted), align = "center", part = "all")
     
-    # 5. Add a text header and the table to the Word document
     doc <- doc %>%
-      body_add_par(paste("Trait:", tr), style = "heading 2") %>% # Adds a clean Word heading
+      body_add_par(paste("Trait:", tr), style = "heading 2") %>% 
       body_add_flextable(value = ft, align = "left") %>%
-      body_add_par("", style = "Normal") # Adds a blank line below the table so they don't touch
+      body_add_par("", style = "Normal") 
   }
   
-  # 6. Lock in landscape mode and save
   doc <- doc %>% body_end_section_landscape()
   print(doc, target = file.path(out_dir, "All_Traits_Variance_Summary_Formatted.docx"))
   cat("SUCCESS! Formatted Landscape Word tables (split by trait) saved to 'Analyses'.\n")
@@ -547,24 +530,63 @@ if(length(master_results_list) > 0) {
   cat("\n[!] WARNING: No results were captured to save.\n")
 }
 
-# 
-### 4. EXPORT MASTER FIXED EFFECTS (ORIGIN) TABLE #### 
-# 
+### 4. EXPORT MASTER FIXED EFFECTS TABLES #### 
 if(length(master_fixed_list) > 0) {
   
-  # UPDATED TO MATCH THE PLOT DICTIONARY!
-  origin_mapping <- c("1"="Ro_North_HG", "2"="Ro_North_Unk", "3"="Ro_North_WC", 
-                      "4"="Ro_South_Unk", "5"="Ro_HG", "6"="Ro_Ledmore", 
-                      "7"="Ro_WC", "8"="Ro_Filler")
+  origin_mapping <- c(
+    "1"="Ro_North_HG", "2"="Ro_North_Unk", "3"="Ro_North_WC", 
+    "4"="Ro_South_Unk", "5"="Ro_HG", "6"="Ro_Ledmore", 
+    "7"="Ro_WC", "8"="Ro_Filler"
+  )
   
-  origin_export <- bind_rows(master_fixed_list) %>%
+  fixed_export <- bind_rows(master_fixed_list) %>%
     mutate(
-      Trial = project_name, # NEW: Add Trial column for future database merges
-      Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping)
+      Trial = project_name,
+      # NEW: Safely label the levels based on the specific Term
+      Level_Name = case_when(
+        tolower(Term) == "origin" ~ as.character(origin_mapping[as.character(Level)]),
+        tolower(Term) == "edge" ~ paste("Edge", Level),
+        tolower(Term) %in% c("distright", "distleft", "distedge") ~ "Slope",
+        TRUE ~ as.character(Level)
+      )
     ) %>%
-    select(Trial, Trait, Model, Term, Level, Origin_Name, Estimate, SE, T_value, Wald_P_Value) %>%
-    arrange(Trait, Model, Origin_Name)
+    select(Trial, Trait, Model, Term, Level, Level_Name, Estimate, SE, T_value, Wald_P_Value) %>%
+    arrange(Trait, Model, Term, Level)
   
-  write.csv(origin_export, file.path(out_dir, "All_Traits_Fixed_Effects.csv"), row.names = FALSE, na = "")
-  cat("SUCCESS! Exported Fixed Effects (Origin) table to 'Analyses'.\n")
+  write.csv(fixed_export, file.path(out_dir, "All_Traits_Fixed_Effects.csv"), row.names = FALSE, na = "")
+  cat("SUCCESS! Exported Fixed Effects (CSV) to 'Analyses'.\n")
+  
+  # --- NEW: PUBLICATION-READY WORD TABLE FOR FIXED EFFECTS ---
+  doc_fixed <- read_docx()
+  fixed_trait_list <- split(fixed_export, fixed_export$Trait)
+  
+  for (tr in names(fixed_trait_list)) {
+    df_formatted_fixed <- fixed_trait_list[[tr]] %>%
+      select(Model, Term, Level_Name, Estimate, SE, T_value, Wald_P_Value) %>%
+      mutate(across(c(Estimate, SE, T_value), ~ ifelse(is.na(.), "", sprintf("%.3f", .))))
+    
+    ft_fixed <- flextable(df_formatted_fixed) %>%
+      theme_booktabs() %>%
+      fontsize(size = 9, part = "all") %>%
+      padding(padding = 3, part = "all") %>%
+      set_header_labels(
+        Level_Name = "Level",
+        T_value = "T-Value",
+        Wald_P_Value = "Wald p-value"
+      ) %>%
+      autofit() %>%
+      merge_v(j = c("Model", "Term")) %>% # Merges duplicate names vertically for a super clean look
+      align(j = 1:3, align = "left", part = "all") %>%
+      align(j = 4:ncol(df_formatted_fixed), align = "center", part = "all")
+    
+    doc_fixed <- doc_fixed %>%
+      body_add_par(paste("Trait:", tr, "- Fixed Effects"), style = "heading 2") %>% 
+      body_add_flextable(value = ft_fixed, align = "left") %>%
+      body_add_par("", style = "Normal") 
+  }
+  
+  doc_fixed <- doc_fixed %>% body_end_section_portrait()
+  print(doc_fixed, target = file.path(out_dir, "All_Traits_Fixed_Effects_Formatted.docx"))
+  cat("SUCCESS! Formatted Portrait Word tables for Fixed Effects saved to 'Analyses'.\n")
 }
+
