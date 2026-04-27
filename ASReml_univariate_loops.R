@@ -8,7 +8,7 @@ as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
 # NEW: Change this when running different model testing scenarios!
-run_id        <- "Baseline"
+run_id        <- "Edge"
 
 # Path to ASReml Standalone (Usually standard across company machines)
 asreml_path   <- "C:/Program Files/ASReml4/bin/asreml.exe"
