@@ -2,13 +2,13 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 18"
-project_name  <- "Kintyre_18_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kielder 162"
+project_name  <- "Kielder_162_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
 # NEW: Change this when running different model testing scenarios!
-run_id        <- "Edge"
+run_id        <- "Baseline"
 
 # Path to ASReml Standalone (Usually standard across company machines)
 asreml_path   <- "C:/Program Files/ASReml4/bin/asreml.exe"
@@ -40,7 +40,7 @@ traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
-traits_to_test <-c("Dre_28","Drs_28")
+#traits_to_test <-c("Dre_28","Drs_28")
 
 # --- 1. SETUP THE SANDBOX DIRECTORY ---
 sandbox_dir <- file.path(trial_folder, "Analyses", run_id)
