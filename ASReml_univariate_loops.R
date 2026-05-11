@@ -348,16 +348,38 @@ for (trait in traits_to_test) {
     if(file.exists(sandbox_sln)) file.remove(sandbox_sln)
   }
   
+  # NEW: Dynamic 4-Panel Plot Sizing (Tile-Based Scaling)
   if(length(res_plots) == 4) {
     master_title <- paste(project_name, "- Trait:", trait)
     
+    # --- DYNAMIC ASPECT RATIO CALCULATION ---
+    trial_cols <- max(raw_data$Ppos, na.rm = TRUE) - min(raw_data$Ppos, na.rm = TRUE) + 1
+    trial_rows <- max(raw_data$Prow, na.rm = TRUE) - min(raw_data$Prow, na.rm = TRUE) + 1
+    
+    # 1. Define physical size per tree (0.15 inches gives a great text-to-plot balance)
+    inches_per_tree <- 0.15 
+    
+    # 2. Calculate dimensions for ONE plot
+    single_plot_width <- trial_cols * inches_per_tree
+    single_plot_height <- trial_rows * inches_per_tree
+    
+    # 3. Calculate Total Canvas (2x2 grid + padding for titles and legends)
+    # Add ~2.5 inches width for the legends, and ~2.5 inches height for main titles
+    dyn_width <- (single_plot_width * 2) + 2.5
+    dyn_height <- (single_plot_height * 2) + 2.5
+    
+    # 4. Failsafe: Prevent the canvas from getting so small that standard text breaks
+    dyn_width <- max(dyn_width, 10)
+    dyn_height <- max(dyn_height, 7)
+    # -----------------------------------------
+    
     res_assembled <- (res_plots[[1]] | res_plots[[2]]) / (res_plots[[3]] | res_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.svg")), res_assembled, width = 12, height = 10,dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.svg")), res_assembled, width = dyn_width, height = dyn_height, dpi = 600)
     
     sol_assembled <- (sol_plots[[1]] | sol_plots[[2]]) / (sol_plots[[3]] | sol_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.svg")), sol_assembled, width = 12, height = 10,dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.svg")), sol_assembled, width = dyn_width, height = dyn_height, dpi = 600)
   }
   
   if(length(trait_variance_list) > 0) {
