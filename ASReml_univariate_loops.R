@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kielder 162"
-project_name  <- "Kielder_162_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Moary 63"
+project_name  <- "Moray_63_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -298,22 +298,44 @@ for (trait in traits_to_test) {
       sol_title <- "2. Design (Block Solutions)"
       
     } else if (part == "2") {
-      b_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
-      r_eff <- sln %>% filter(Term == "Block.Prow") %>% select(Level, Estimate)
-      p_eff <- sln %>% filter(Term == "Block.Ppos") %>% select(Level, Estimate)
+      b_eff <- sln %>% filter(tolower(Term) == "block") %>% select(Level, Estimate)
+      r_eff <- sln %>% filter(tolower(Term) == "block.prow") %>% select(Level, Estimate)
+      p_eff <- sln %>% filter(tolower(Term) == "block.ppos") %>% select(Level, Estimate)
       
       map_data <- map_data %>% 
         mutate(
           Block_key = as.character(Block),
-          BProw_key = sprintf("%d.%03d", as.integer(Block), as.integer(Prow)),
-          BPpos_key = sprintf("%d.%03d", as.integer(Block), as.integer(Ppos))
+          BProw_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Prow))),
+          BPpos_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Ppos)))
         ) %>%
         left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(B_est = Estimate) %>%
         left_join(r_eff, by = c("BProw_key" = "Level")) %>% rename(R_est = Estimate) %>%
         left_join(p_eff, by = c("BPpos_key" = "Level")) %>% rename(P_est = Estimate) %>%
-        mutate(D_Sum = replace_na(B_est,0) + replace_na(R_est,0) + replace_na(P_est,0)) %>%
+        mutate(D_Sum = replace_na(B_est,0) + replace_na(R_est,0) + replace_na(P_est,0))
+      
+      # --- NEW: DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
+      env_terms <- c("Edge", "Distright", "Distleft", "Distedge")
+      for (e_term in env_terms) {
+        term_idx <- tolower(sln$Term) == tolower(e_term)
+        if (any(term_idx) && e_term %in% colnames(map_data)) {
+          t_sln <- sln[term_idx, ]
+          if (nrow(t_sln) > 1) { # Factor logic
+            temp_join <- map_data %>%
+              mutate(Join_Key = as.character(.data[[e_term]])) %>%
+              left_join(t_sln %>% select(Level, Estimate), by = c("Join_Key" = "Level"))
+            map_data$D_Sum <- map_data$D_Sum + replace_na(temp_join$Estimate, 0)
+          } else if (nrow(t_sln) == 1) { # Covariate logic
+            slope <- t_sln$Estimate[1]
+            raw_val <- suppressWarnings(as.numeric(as.character(map_data[[e_term]])))
+            map_data$D_Sum <- map_data$D_Sum + replace_na(raw_val * slope, 0)
+          }
+        }
+      }
+
+      
+      map_data <- map_data %>% 
         mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, D_Sum))
-      sol_title <- "3. Design+ (Blk+Row+Col Solutions)"
+      sol_title <- "3. Design+ (Blk+Row+Col+Edge Solutions)"
       
     } else {
       map_data <- map_data %>% 
