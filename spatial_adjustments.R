@@ -6,13 +6,13 @@ library(tidyverse)
 library(xml2) 
 
 # 0. CONTROL PANEL #### 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kintyre 17"
-csv_file      <- "Kintyre_17_S.csv"
-dms_xml_file  <- "Kintyre_17_DMS.xml" # The master parent XML from Dataplan
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kielder 162"
+csv_file      <- "Kielder_162_S.csv"
+dms_xml_file  <- "Kielder_162_DMS.xml" # The master parent XML from Dataplan
 
 # ---> SPECIFY WHAT YOU WANT TO ADJUST HERE <---
 target_run_id <- "Baseline"  # The folder to read solutions from: Use vocab "Baseline" "Edge_correction"
-target_trait  <- "St_28"         # The specific trait to adjust
+target_trait  <- "Drs_28"         # The specific trait to adjust
 target_model  <- "Spatial AR1"      # "Design", "Design+", or "Spatial AR1"
 # ----------------------------------------------
 
@@ -51,19 +51,51 @@ sln <- read.table(sln_file, skip = 1, fill = TRUE, stringsAsFactors = FALSE,
                   colClasses = c("character", "character", "numeric", "numeric"))
 colnames(sln) <- c("Term", "Level", "Estimate", "SE")
 
-b_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
-r_eff <- sln %>% filter(Term == "Block.Prow") %>% select(Level, Estimate)
-p_eff <- sln %>% filter(Term == "Block.Ppos") %>% select(Level, Estimate)
+# Use tolower() to protect against ASReml's random capitalizations
+b_eff <- sln %>% filter(tolower(Term) == "block") %>% select(Level, Estimate)
+r_eff <- sln %>% filter(tolower(Term) == "block.prow") %>% select(Level, Estimate)
+p_eff <- sln %>% filter(tolower(Term) == "block.ppos") %>% select(Level, Estimate)
 
 adj_data <- raw_data %>% 
   mutate(
     Block_key = as.character(Block),
-    BProw_key = sprintf("%d.%03d", as.integer(Block), as.integer(Prow)),
-    BPpos_key = sprintf("%d.%03d", as.integer(Block), as.integer(Ppos))
+    BProw_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Prow))),
+    BPpos_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Ppos)))
   ) %>%
   left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(Block_Est = Estimate) %>%
   left_join(r_eff, by = c("BProw_key" = "Level")) %>% rename(Row_Est = Estimate) %>%
   left_join(p_eff, by = c("BPpos_key" = "Level")) %>% rename(Col_Est = Estimate)
+
+# --- NEW: DYNAMIC EDGE & COVARIATE ADDER ---
+env_terms <- c("Edge", "Distright", "Distleft", "Distedge") # Add any other spatial modifiers here
+adj_data$Extra_Env_Sum <- 0 # Initialize a baseline 0 column
+
+for (e_term in env_terms) {
+  term_idx <- tolower(sln$Term) == tolower(e_term)
+  
+  # Only attempt the math if the term is in the model AND the raw data
+  if (any(term_idx) && e_term %in% colnames(adj_data)) {
+    t_sln <- sln[term_idx, ]
+    
+    # Scenario A: It's a Factor (e.g., Edge 1 and Edge 2)
+    if (nrow(t_sln) > 1) {
+      temp_join <- adj_data %>%
+        mutate(Join_Key = as.character(.data[[e_term]])) %>%
+        left_join(t_sln %>% select(Level, Estimate), by = c("Join_Key" = "Level"))
+      
+      adj_data$Extra_Env_Sum <- adj_data$Extra_Env_Sum + replace_na(temp_join$Estimate, 0)
+      cat(paste("  -> Included FACTOR edge effect:", e_term, "\n"))
+      
+      # Scenario B: It's a Covariate Slope (e.g., continuous distance integers)
+    } else if (nrow(t_sln) == 1) {
+      slope <- t_sln$Estimate[1]
+      raw_val <- suppressWarnings(as.numeric(as.character(adj_data[[e_term]])))
+      
+      adj_data$Extra_Env_Sum <- adj_data$Extra_Env_Sum + replace_na(raw_val * slope, 0)
+      cat(paste("  -> Included COVARIATE edge effect:", e_term, "\n"))
+    }
+  }
+}
 
 # 4. CONDITIONAL MATH BASED ON MODEL ####
 if (target_model == "Spatial AR1") {
@@ -74,13 +106,14 @@ if (target_model == "Spatial AR1") {
   adj_data <- adj_data %>%
     left_join(yht, by = "Record") %>%
     mutate(
-      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0),
+      # Notice we now add the Extra_Env_Sum into the Design_Sum
+      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0) + Extra_Env_Sum,
       Local_Trend = replace_na(Residual, 0)
     )
 } else {
   adj_data <- adj_data %>%
     mutate(
-      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0),
+      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0) + Extra_Env_Sum,
       Local_Trend = 0
     )
 }
