@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Moary 63"
-project_name  <- "Moray_63_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Ae 58"
+project_name  <- "Ae_58_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -20,7 +20,7 @@ library(here)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
-library(svglite)
+#library(svglite)
 library(flextable)
 library(officer)
 
@@ -68,19 +68,53 @@ models_to_run <- c("1" = "Design", "2" = "Design+", "3" = "Spatial AR1")
 master_results_list <- list()
 master_fixed_list <- list() # NEW: To hold Origin and other fixed effects
 
-# Calculate Block Boundaries for the Black Outlines & Text Labels
-block_bounds <- raw_data %>%
-  filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block)) %>%
+# --- MAPPING CALCULATIONS & THEMES ---
+# Calculate the geometric center for labels
+block_labels <- raw_data %>%
+  filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block) & Block != 0 & as.character(Block) != "") %>%
   group_by(Block) %>%
   summarize(
-    xmin = min(as.numeric(Ppos), na.rm = TRUE) - 0.5,
-    xmax = max(as.numeric(Ppos), na.rm = TRUE) + 0.5,
-    ymin = min(as.numeric(Prow), na.rm = TRUE) - 0.5,
-    ymax = max(as.numeric(Prow), na.rm = TRUE) + 0.5,
-    # NEW: Calculate the geometric center for the labels
-    x_mid = (xmin + xmax) / 2,
-    y_mid = (ymin + ymax) / 2
+    x_mid = mean(as.numeric(Ppos), na.rm = TRUE),
+    y_mid = mean(as.numeric(Prow), na.rm = TRUE)
   )
+
+# Calculate Internal Segments
+h_segments <- raw_data %>%
+  arrange(Prow, Ppos) %>%
+  mutate(next_block = lead(Block)) %>%
+  filter(Block != next_block & Prow == lead(Prow) & !is.na(Block)) %>%
+  mutate(x = Ppos + 0.5, xend = Ppos + 0.5, y = Prow - 0.5, yend = Prow + 0.5)
+
+v_segments <- raw_data %>%
+  arrange(Ppos, Prow) %>%
+  mutate(next_block = lead(Block)) %>%
+  filter(Block != next_block & Ppos == lead(Ppos) & !is.na(Block)) %>%
+  mutate(x = Ppos - 0.5, xend = Ppos + 0.5, y = Prow + 0.5, yend = Prow + 0.5)
+
+# Calculate Outer Trial Border
+trial_border <- data.frame(
+  xmin = min(raw_data$Ppos, na.rm = TRUE) - 0.5,
+  xmax = max(raw_data$Ppos, na.rm = TRUE) + 0.5,
+  ymin = min(raw_data$Prow, na.rm = TRUE) - 0.5,
+  ymax = max(raw_data$Prow, na.rm = TRUE) + 0.5
+)
+
+# Standard Theme
+theme_trial <- theme_void() + 
+  theme(
+    plot.title = element_text(size = 20, face = "bold", margin = margin(b = 10)),
+    plot.subtitle = element_text(size = 14, color = "grey30"),
+    legend.key.height = unit(1.5, "cm"),
+    legend.text = element_text(size = 12)
+  )
+
+# Shared Mapping Layers
+shared_layers <- list(
+  geom_segment(data = h_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 0.8, inherit.aes = FALSE),
+  geom_segment(data = v_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 0.8, inherit.aes = FALSE),
+  geom_rect(data = trial_border, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=1.5, inherit.aes=FALSE),
+  geom_label(data = block_labels, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 6, fontface = "bold", fill = alpha("white", 0.9), label.size = NA)
+)
 
 ppgmap_colors <- c("darkblue", "blue", "cyan", "green", "yellow", "orange", "red", "darkred")
 
@@ -89,42 +123,28 @@ ppgmap_colors <- c("darkblue", "blue", "cyan", "green", "yellow", "orange", "red
 # 
 for (trait in traits_to_test) {
   cat("\n========================================\nProcessing:", trait, "\n")
-  
   raw_data[[trait]] <- suppressWarnings(as.numeric(as.character(raw_data[[trait]])))
   
-  # NEW: Create a blank failsafe plot that holds its rigid shape!
-  blank_plot <- ggplot() + 
-    theme_void() + 
+  trait_variance_list <- list()
+  
+  # Initialize plots for this trait
+  blank_plot <- ggplot() + theme_void() + 
     annotate("text", x = 0.5, y = 0.5, label = "Model Did Not Converge", color = "darkred", fontface = "italic", size = 5) +
     coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) 
   
-  # Pre-fill the lists with the blanks so the 4-panel grid never collapses
   res_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
   sol_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
-  trait_variance_list <- list()
   
   design_Ve <- NA 
   design_logL <- NA
   
-  # --- PANEL 1: RAW DATA ---
-  force_breaks <- function(x) { 
-    min_val <- min(x, na.rm = TRUE)
-    max_val <- max(x, na.rm = TRUE)
-    if (!is.finite(min_val) || !is.finite(max_val)) return(c(0, 1)) # Failsafe for all NAs
-    seq(min_val, max_val, length.out = 5) 
-  }
-  
-  format_labels <- function(x) sprintf("%.2f", x)
-  
-  raw_map <- ggplot(raw_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = .data[[trait]])) +
-    geom_tile(color = "black", size = 0.05) + 
-    geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-    scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
-    theme_void() + 
-    theme(legend.key.height = unit(1.5, "cm")) +
-    geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-    scale_y_reverse() + coord_fixed() + labs(title = "1. Raw Data")
-  res_plots[[1]] <- raw_map; sol_plots[[1]] <- raw_map
+   # --- PANEL 1: RAW DATA ---
+  res_plots[[1]] <- ggplot(raw_data, aes(x = Ppos, y = Prow)) +
+    geom_tile(aes(fill = .data[[trait]]), color = "lightgray", size = 0.2) + 
+    scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
+    shared_layers + # Now included in every plot
+    theme_trial + scale_y_reverse() + coord_fixed() + labs(title = "1. Raw Data")
+  sol_plots[[1]] <- res_plots[[1]]
   
   # --- RUN MODELS ---
   for (part in names(models_to_run)) {
@@ -165,7 +185,7 @@ for (trait in traits_to_test) {
     logl_match <- str_extract(logl_line, "LogL=\\s*[-0-9.]+")
     logl_val <- as.numeric(gsub("LogL=\\s*", "", logl_match))    
     
-    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Tree") 
+    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Plot","Tree") 
     
     current_model_vars <- list() 
     
@@ -286,32 +306,29 @@ for (trait in traits_to_test) {
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
     map_data <- raw_data %>% 
-      left_join(yht, by = "Record") %>% 
-      mutate(Resid = ifelse(is.na(.data[[trait]]), NA, Residual))
+      left_join(yht, by = "Record") %>%
+      mutate(Resid = Residual)
     
-    if (part == "1") {
-      block_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
-      map_data <- map_data %>% 
-        mutate(Block_key = as.character(Block)) %>%
-        left_join(block_eff, by = c("Block_key" = "Level")) %>%
-        mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, Estimate))
-      sol_title <- "2. Design (Block Solutions)"
-      
-    } else if (part == "2") {
+    if (part == "1" || part == "2") {
       b_eff <- sln %>% filter(tolower(Term) == "block") %>% select(Level, Estimate)
-      r_eff <- sln %>% filter(tolower(Term) == "block.prow") %>% select(Level, Estimate)
-      p_eff <- sln %>% filter(tolower(Term) == "block.ppos") %>% select(Level, Estimate)
+      # Use a robust regex to catch "Subblock" or "SubBlock" in the raw data
+      sub_col_name <- grep("subblock", colnames(raw_data), ignore.case = TRUE, value = TRUE)
+      
+      sub_eff <- sln %>% filter(tolower(Term) %in% c("block.subblock", "subblock")) %>% select(Level, Estimate)
+      p_eff <- sln %>% filter(tolower(Term) %in% c("plot", "block.plot")) %>% select(Level, Estimate)
       
       map_data <- map_data %>% 
         mutate(
           Block_key = as.character(Block),
-          BProw_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Prow))),
-          BPpos_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Ppos)))
+          # Safely build the Sub_key only if the column actually exists
+          Sub_key = if(length(sub_col_name) > 0) paste(Block, .data[[sub_col_name[1]]], sep=".") else NA,
+          Plot_key = as.character(Plot)
         ) %>%
         left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(B_est = Estimate) %>%
-        left_join(r_eff, by = c("BProw_key" = "Level")) %>% rename(R_est = Estimate) %>%
-        left_join(p_eff, by = c("BPpos_key" = "Level")) %>% rename(P_est = Estimate) %>%
-        mutate(D_Sum = replace_na(B_est,0) + replace_na(R_est,0) + replace_na(P_est,0))
+        left_join(sub_eff, by = c("Sub_key" = "Level")) %>% rename(Sub_est = Estimate) %>%
+        left_join(p_eff, by = c("Plot_key" = "Level")) %>% rename(P_est = Estimate) %>%
+        mutate(D_Sum = replace_na(B_est,0) + replace_na(Sub_est,0) + replace_na(P_est,0))
+      
       
       # --- NEW: DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
       env_terms <- c("Edge", "Distright", "Distleft", "Distedge")
@@ -346,23 +363,19 @@ for (trait in traits_to_test) {
       sol_title <- "4. Spatial Effects Correction"
     }
     
-    sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = PlotVal)) +
-      geom_tile(color = "black", size = 0.05) + 
-      geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
-      theme_void() + 
-      theme(legend.key.height = unit(1.5, "cm"), plot.subtitle = element_text(size = 8)) +
-      geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + coord_fixed() + labs(title = sol_title, subtitle = metrics_subtitle)
+   # Define the plot
+    # Notice the explicit inherit.aes = FALSE in the border layer
+    sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = Ppos, y = Prow)) +
+      geom_tile(aes(fill = PlotVal), color = "lightgray", size = 0.2) +
+      scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
+      shared_layers + # Standard template
+      theme_trial + scale_y_reverse() + coord_fixed() + labs(title = model_name, subtitle = metrics_subtitle)
     
-    res_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = Resid)) +
-      geom_tile(color = "black", size = 0.05) + 
-      geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
-      theme_void() + 
-      theme(legend.key.height = unit(1.5, "cm"), plot.subtitle = element_text(size = 8)) +
-      geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res"), subtitle = metrics_subtitle)
+    res_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = Ppos, y = Prow)) +
+      geom_tile(aes(fill = Resid), color = "lightgray", size = 0.2) +
+      scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
+      shared_layers + # Standard template
+      theme_trial + scale_y_reverse() + coord_fixed() + labs(title = paste(model_name, "Resid"), subtitle = metrics_subtitle)
     
     # --- 4. CLEAN THE SANDBOX FOR THE NEXT LOOP ---
     file.remove(sandbox_asr)
@@ -404,63 +417,42 @@ for (trait in traits_to_test) {
     ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.svg")), sol_assembled, width = dyn_width, height = dyn_height, dpi = 600)
   }
   
+  # --- BARPLOT SECTION ---
   if(length(trait_variance_list) > 0) {
+    
+    # Official terms list. 
+    expected_terms <- c("Block", "SubBlock", "Block.SubBlock", "Block.Prow", 
+                        "Block.Ppos", "Prow", "Ppos", "Plot", "Tree", "Family_id", 
+                        "Family_name", "uni(Crosstype,2)", "Spatial Variance", "Independent Error")
+    
     trait_df <- bind_rows(trait_variance_list) %>% 
-      mutate(Pct_Var = (Variance / design_Ve) * 100) %>% 
+      group_by(Model, Term) %>% 
+      slice_tail(n = 1) %>%  # Removes the duplicates
+      ungroup() %>%
+      filter(Term %in% expected_terms) %>% # Uses the exact terms the scraper generated
+      group_by(Model) %>%
+      mutate(
+        Total_Var_In_Model = sum(Variance, na.rm = TRUE),
+        Pct_Var = (Variance / Total_Var_In_Model) * 100
+      ) %>% 
       ungroup()
     
+    # Force the ordering so colors stay mapped logically
     trait_df$Model <- factor(trait_df$Model, levels = c("Design", "Design+", "Spatial AR1"))
-    
-    all_terms <- unique(trait_df$Term)
-    other_terms <- setdiff(all_terms, c("Independent Error", "Spatial Variance"))
-    
-    ordered_levels <- c(sort(other_terms), "Spatial Variance", "Independent Error")
-    trait_df$Term <- factor(trait_df$Term, levels = ordered_levels)
+    trait_df$Term <- factor(trait_df$Term, levels = expected_terms)
     
     bp <- ggplot(trait_df, aes(x = Model, y = Pct_Var, fill = Term)) +
-      geom_col(color = "black") + 
-      geom_hline(yintercept = 100, linetype = "dashed", color = "red", linewidth = 1) +
+      geom_col(color = "black", size = 0.2) + 
+      geom_hline(yintercept = 100, linetype = "dashed", color = "black", size = 0.5) +
       theme_minimal() + 
       scale_fill_brewer(palette = "Set3") +
       labs(title = paste("Variance Components:", trait), 
-           y = paste0("% of Design Ve (", round(design_Ve, 3), ")")) +
+           y = "% of Total Variance") +
       theme(legend.position = "right")
     
-    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.svg")), bp, width = 7, height = 6,dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.svg")), bp, width = 8, height = 6, dpi = 600)
   }
   
-  if(length(master_fixed_list) > 0) {
-    origin_mapping <- c(
-      "1" = "Ro_North_HG", "2" = "Ro_North_Unk", "3" = "Ro_North_WC",
-      "4" = "Ro_South_Unk", "5" = "Ro_HG", "6" = "Ro_Ledmore",
-      "7" = "Ro_WC", "8" = "Ro_Filler"
-    )
-    
-    # NEW: Plot ONLY Origin so Edge doesn't crash the graph
-    trait_origin_df <- bind_rows(master_fixed_list) %>% 
-      filter(Trait == trait & Model == "Spatial AR1" & Term == "Origin") %>%
-      mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping))
-    
-    if(nrow(trait_origin_df) > 0) {
-      origin_p <- trait_origin_df$Wald_P_Value[1]
-      
-      op_plot <- ggplot(trait_origin_df, aes(x = Origin_Name, y = Estimate)) +
-        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-        geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
-        geom_point(size = 3, color = "darkblue") +
-        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-        theme_minimal() +
-        labs(
-          title = paste("Origin Solutions (Spatial AR1):", trait),
-          subtitle = paste("Wald P-value:", origin_p),
-          x = "Origin",
-          y = "Solution Estimate (+/- 1 SE)"
-        ) +
-        scale_x_discrete(drop = TRUE) 
-      
-      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.svg")), op_plot, width = 7, height = 5,dpi = 600)
-    }
-  }
 }
 
 # 3. EXPORT FINAL MASTER TABLE (Wide-by-Model with Deltas) AND Formatted word document. 
