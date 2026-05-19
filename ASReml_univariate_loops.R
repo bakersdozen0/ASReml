@@ -20,7 +20,7 @@ library(here)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
-#library(pnglite)
+#library(svglite)
 library(flextable)
 library(officer)
 
@@ -68,24 +68,52 @@ models_to_run <- c("1" = "Design", "2" = "Design+", "3" = "Spatial AR1")
 master_results_list <- list()
 master_fixed_list <- list() # NEW: To hold Origin and other fixed effects
 
-# Refined Theme for high legibility
-theme_trial <- theme_void() + 
-  theme(
-    plot.title = element_text(size = 24, face = "bold", margin = margin(b = 15)),
-    plot.subtitle = element_text(size = 16, color = "black", margin = margin(b = 10)),
-    legend.key.height = unit(2, "cm"),
-    legend.text = element_text(size = 14)
+# --- MAPPING CALCULATIONS & THEMES ---
+# Calculate the geometric center for labels
+block_labels <- raw_data %>%
+  filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block) & Block != 0 & as.character(Block) != "") %>%
+  group_by(Block) %>%
+  summarize(
+    x_mid = mean(as.numeric(Ppos), na.rm = TRUE),
+    y_mid = mean(as.numeric(Prow), na.rm = TRUE)
   )
 
-## shared layers for plots: 
+# Calculate Internal Segments
+h_segments <- raw_data %>%
+  arrange(Prow, Ppos) %>%
+  mutate(next_block = lead(Block)) %>%
+  filter(Block != next_block & Prow == lead(Prow) & !is.na(Block)) %>%
+  mutate(x = Ppos + 0.5, xend = Ppos + 0.5, y = Prow - 0.5, yend = Prow + 0.5)
+
+v_segments <- raw_data %>%
+  arrange(Ppos, Prow) %>%
+  mutate(next_block = lead(Block)) %>%
+  filter(Block != next_block & Ppos == lead(Ppos) & !is.na(Block)) %>%
+  mutate(x = Ppos - 0.5, xend = Ppos + 0.5, y = Prow + 0.5, yend = Prow + 0.5)
+
+# Calculate Outer Trial Border
+trial_border <- data.frame(
+  xmin = min(raw_data$Ppos, na.rm = TRUE) - 0.5,
+  xmax = max(raw_data$Ppos, na.rm = TRUE) + 0.5,
+  ymin = min(raw_data$Prow, na.rm = TRUE) - 0.5,
+  ymax = max(raw_data$Prow, na.rm = TRUE) + 0.5
+)
+
+# Standard Theme
+theme_trial <- theme_void() + 
+  theme(
+    plot.title = element_text(size = 20, face = "bold", margin = margin(b = 10)),
+    plot.subtitle = element_text(size = 14, color = "grey30"),
+    legend.key.height = unit(1.5, "cm"),
+    legend.text = element_text(size = 12)
+  )
+
+# Shared Mapping Layers
 shared_layers <- list(
-  # 1. Internal Block Borders
   geom_segment(data = h_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 0.8, inherit.aes = FALSE),
   geom_segment(data = v_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 0.8, inherit.aes = FALSE),
-  # 2. Outer Trial Border (Solid black box around entire trial)
-  geom_rect(data = trial_border, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=2, inherit.aes=FALSE),
-  # 3. Block Labels
-  geom_label(data = block_labels, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 8, fontface = "bold", fill = alpha("white", 0.9), label.size = NA)
+  geom_rect(data = trial_border, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=1.5, inherit.aes=FALSE),
+  geom_label(data = block_labels, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 6, fontface = "bold", fill = alpha("white", 0.9), label.size = NA)
 )
 
 ppgmap_colors <- c("darkblue", "blue", "cyan", "green", "yellow", "orange", "red", "darkred")
@@ -110,14 +138,7 @@ for (trait in traits_to_test) {
   design_Ve <- NA 
   design_logL <- NA
   
-  # Standard border function to keep code clean and identical across all plots
-  add_borders <- list(
-    geom_segment(data = h_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 1, inherit.aes = FALSE),
-    geom_segment(data = v_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 1, inherit.aes = FALSE),
-    geom_label(data = block_labels, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 5, fontface = "bold", fill = alpha("white", 0.9), label.size = NA)
-  )
-  
-  # --- PANEL 1: RAW DATA ---
+   # --- PANEL 1: RAW DATA ---
   res_plots[[1]] <- ggplot(raw_data, aes(x = Ppos, y = Prow)) +
     geom_tile(aes(fill = .data[[trait]]), color = "lightgray", size = 0.2) + 
     scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
@@ -164,7 +185,7 @@ for (trait in traits_to_test) {
     logl_match <- str_extract(logl_line, "LogL=\\s*[-0-9.]+")
     logl_val <- as.numeric(gsub("LogL=\\s*", "", logl_match))    
     
-    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Plot") 
+    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Plot","Tree") 
     
     current_model_vars <- list() 
     
@@ -342,16 +363,7 @@ for (trait in traits_to_test) {
       sol_title <- "4. Spatial Effects Correction"
     }
     
-    # 1. Update the Data Formatting
-    # Ensure Prow and Ppos are numeric and Block is integer for plotting consistency
-    map_data <- map_data %>%
-      mutate(
-        Prow = as.numeric(Prow),
-        Ppos = as.numeric(Ppos),
-        Block = as.integer(Block)
-      )
-    
-    # 2. Define the plot
+   # Define the plot
     # Notice the explicit inherit.aes = FALSE in the border layer
     sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = Ppos, y = Prow)) +
       geom_tile(aes(fill = PlotVal), color = "lightgray", size = 0.2) +
@@ -398,20 +410,26 @@ for (trait in traits_to_test) {
     
     res_assembled <- (res_plots[[1]] | res_plots[[2]]) / (res_plots[[3]] | res_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.png")), res_assembled, width = dyn_width, height = dyn_height, dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.svg")), res_assembled, width = dyn_width, height = dyn_height, dpi = 600)
     
     sol_assembled <- (sol_plots[[1]] | sol_plots[[2]]) / (sol_plots[[3]] | sol_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.png")), sol_assembled, width = dyn_width, height = dyn_height, dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.svg")), sol_assembled, width = dyn_width, height = dyn_height, dpi = 600)
   }
   
+  # --- BARPLOT SECTION ---
   if(length(trait_variance_list) > 0) {
-    # Define EXACT terms to filter out noise
+    
+    # Official terms list. 
     expected_terms <- c("Block", "SubBlock", "Block.SubBlock", "Block.Prow", 
-                        "Block.Ppos", "Prow", "Ppos", "Independent Error", "Spatial Variance")
+                        "Block.Ppos", "Prow", "Ppos", "Plot", "Tree", "Family_id", 
+                        "Family_name", "uni(Crosstype,2)", "Spatial Variance", "Independent Error")
     
     trait_df <- bind_rows(trait_variance_list) %>% 
-      filter(Term %in% expected_terms) %>% # <--- THE FIX FOR EXTRA BARS
+      group_by(Model, Term) %>% 
+      slice_tail(n = 1) %>%  # Removes the duplicates
+      ungroup() %>%
+      filter(Term %in% expected_terms) %>% # Uses the exact terms the scraper generated
       group_by(Model) %>%
       mutate(
         Total_Var_In_Model = sum(Variance, na.rm = TRUE),
@@ -419,56 +437,22 @@ for (trait in traits_to_test) {
       ) %>% 
       ungroup()
     
-    # 3. SET ORDER: This fixes the "incorrectly placed" look by forcing a consistent order
+    # Force the ordering so colors stay mapped logically
     trait_df$Model <- factor(trait_df$Model, levels = c("Design", "Design+", "Spatial AR1"))
     trait_df$Term <- factor(trait_df$Term, levels = expected_terms)
     
-    # 4. PLOT
     bp <- ggplot(trait_df, aes(x = Model, y = Pct_Var, fill = Term)) +
-      geom_col(color = "black", size = 0.2) + # Thinner lines
+      geom_col(color = "black", size = 0.2) + 
       geom_hline(yintercept = 100, linetype = "dashed", color = "black", size = 0.5) +
       theme_minimal() + 
       scale_fill_brewer(palette = "Set3") +
       labs(title = paste("Variance Components:", trait), 
            y = "% of Total Variance") +
-      theme(legend.position = "right", 
-            legend.text = element_text(size = 10))
+      theme(legend.position = "right")
     
-    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 8, height = 6, dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.svg")), bp, width = 8, height = 6, dpi = 600)
   }
   
-  if(length(master_fixed_list) > 0) {
-    origin_mapping <- c(
-      "1" = "Ro_North_HG", "2" = "Ro_North_Unk", "3" = "Ro_North_WC",
-      "4" = "Ro_South_Unk", "5" = "Ro_HG", "6" = "Ro_Ledmore",
-      "7" = "Ro_WC", "8" = "Ro_Filler"
-    )
-    
-    # NEW: Plot ONLY Origin so Edge doesn't crash the graph
-    trait_origin_df <- bind_rows(master_fixed_list) %>% 
-      filter(Trait == trait & Model == "Spatial AR1" & Term == "Origin") %>%
-      mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping))
-    
-    if(nrow(trait_origin_df) > 0) {
-      origin_p <- trait_origin_df$Wald_P_Value[1]
-      
-      op_plot <- ggplot(trait_origin_df, aes(x = Origin_Name, y = Estimate)) +
-        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-        geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
-        geom_point(size = 3, color = "darkblue") +
-        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-        theme_minimal() +
-        labs(
-          title = paste("Origin Solutions (Spatial AR1):", trait),
-          subtitle = paste("Wald P-value:", origin_p),
-          x = "Origin",
-          y = "Solution Estimate (+/- 1 SE)"
-        ) +
-        scale_x_discrete(drop = TRUE) 
-      
-      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5,dpi = 600)
-    }
-  }
 }
 
 # 3. EXPORT FINAL MASTER TABLE (Wide-by-Model with Deltas) AND Formatted word document. 
