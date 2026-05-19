@@ -20,7 +20,7 @@ library(here)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
-library(svglite)
+#library(pnglite)
 library(flextable)
 library(officer)
 
@@ -97,6 +97,19 @@ for (trait in traits_to_test) {
   cat("\n========================================\nProcessing:", trait, "\n")
   raw_data[[trait]] <- suppressWarnings(as.numeric(as.character(raw_data[[trait]])))
   
+  trait_variance_list <- list()
+  
+  # Initialize plots for this trait
+  blank_plot <- ggplot() + theme_void() + 
+    annotate("text", x = 0.5, y = 0.5, label = "Model Did Not Converge", color = "darkred", fontface = "italic", size = 5) +
+    coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) 
+  
+  res_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
+  sol_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
+  
+  design_Ve <- NA 
+  design_logL <- NA
+  
   # Standard border function to keep code clean and identical across all plots
   add_borders <- list(
     geom_segment(data = h_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 1, inherit.aes = FALSE),
@@ -106,11 +119,9 @@ for (trait in traits_to_test) {
   
   # --- PANEL 1: RAW DATA ---
   res_plots[[1]] <- ggplot(raw_data, aes(x = Ppos, y = Prow)) +
-    # The grid (color = gray, size = 0.2)
     geom_tile(aes(fill = .data[[trait]]), color = "lightgray", size = 0.2) + 
-    scale_fill_gradientn(colors = ppgmap_colors, na.value = "lightgray", breaks = force_breaks, labels = format_labels) +
-    # The shared template
-    shared_layers +
+    scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
+    shared_layers + # Now included in every plot
     theme_trial + scale_y_reverse() + coord_fixed() + labs(title = "1. Raw Data")
   sol_plots[[1]] <- res_plots[[1]]
   
@@ -153,7 +164,7 @@ for (trait in traits_to_test) {
     logl_match <- str_extract(logl_line, "LogL=\\s*[-0-9.]+")
     logl_val <- as.numeric(gsub("LogL=\\s*", "", logl_match))    
     
-    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Tree") 
+    terms <- c("Block", "SubBlock", "Block\\.SubBlock", "Block\\.Prow", "Block\\.Ppos", "Prow", "Ppos", "Family_id", "Family_name", "uni\\(Crosstype,2\\)", "units", "Residual", "Plot") 
     
     current_model_vars <- list() 
     
@@ -343,19 +354,15 @@ for (trait in traits_to_test) {
     # 2. Define the plot
     # Notice the explicit inherit.aes = FALSE in the border layer
     sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = Ppos, y = Prow)) +
-      # The grid
       geom_tile(aes(fill = PlotVal), color = "lightgray", size = 0.2) +
       scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
-      # The shared template
-      shared_layers +
+      shared_layers + # Standard template
       theme_trial + scale_y_reverse() + coord_fixed() + labs(title = model_name, subtitle = metrics_subtitle)
     
     res_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = Ppos, y = Prow)) +
-      # The grid
       geom_tile(aes(fill = Resid), color = "lightgray", size = 0.2) +
       scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
-      # The shared template
-      shared_layers +
+      shared_layers + # Standard template
       theme_trial + scale_y_reverse() + coord_fixed() + labs(title = paste(model_name, "Resid"), subtitle = metrics_subtitle)
     
     # --- 4. CLEAN THE SANDBOX FOR THE NEXT LOOP ---
@@ -391,36 +398,43 @@ for (trait in traits_to_test) {
     
     res_assembled <- (res_plots[[1]] | res_plots[[2]]) / (res_plots[[3]] | res_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.svg")), res_assembled, width = dyn_width, height = dyn_height, dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.png")), res_assembled, width = dyn_width, height = dyn_height, dpi = 600)
     
     sol_assembled <- (sol_plots[[1]] | sol_plots[[2]]) / (sol_plots[[3]] | sol_plots[[4]]) +
       plot_annotation(title = master_title, theme = theme(plot.title = element_text(size = 18, face = "bold")))
-    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.svg")), sol_assembled, width = dyn_width, height = dyn_height, dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.png")), sol_assembled, width = dyn_width, height = dyn_height, dpi = 600)
   }
   
   if(length(trait_variance_list) > 0) {
+    # Define EXACT terms to filter out noise
+    expected_terms <- c("Block", "SubBlock", "Block.SubBlock", "Block.Prow", 
+                        "Block.Ppos", "Prow", "Ppos", "Independent Error", "Spatial Variance")
+    
     trait_df <- bind_rows(trait_variance_list) %>% 
-      mutate(Pct_Var = (Variance / design_Ve) * 100) %>% 
+      filter(Term %in% expected_terms) %>% # <--- THE FIX FOR EXTRA BARS
+      group_by(Model) %>%
+      mutate(
+        Total_Var_In_Model = sum(Variance, na.rm = TRUE),
+        Pct_Var = (Variance / Total_Var_In_Model) * 100
+      ) %>% 
       ungroup()
     
+    # 3. SET ORDER: This fixes the "incorrectly placed" look by forcing a consistent order
     trait_df$Model <- factor(trait_df$Model, levels = c("Design", "Design+", "Spatial AR1"))
+    trait_df$Term <- factor(trait_df$Term, levels = expected_terms)
     
-    all_terms <- unique(trait_df$Term)
-    other_terms <- setdiff(all_terms, c("Independent Error", "Spatial Variance"))
-    
-    ordered_levels <- c(sort(other_terms), "Spatial Variance", "Independent Error")
-    trait_df$Term <- factor(trait_df$Term, levels = ordered_levels)
-    
+    # 4. PLOT
     bp <- ggplot(trait_df, aes(x = Model, y = Pct_Var, fill = Term)) +
-      geom_col(color = "black") + 
-      geom_hline(yintercept = 100, linetype = "dashed", color = "red", linewidth = 1) +
+      geom_col(color = "black", size = 0.2) + # Thinner lines
+      geom_hline(yintercept = 100, linetype = "dashed", color = "black", size = 0.5) +
       theme_minimal() + 
       scale_fill_brewer(palette = "Set3") +
       labs(title = paste("Variance Components:", trait), 
-           y = paste0("% of Design Ve (", round(design_Ve, 3), ")")) +
-      theme(legend.position = "right")
+           y = "% of Total Variance") +
+      theme(legend.position = "right", 
+            legend.text = element_text(size = 10))
     
-    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.svg")), bp, width = 7, height = 6,dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 8, height = 6, dpi = 600)
   }
   
   if(length(master_fixed_list) > 0) {
@@ -452,7 +466,7 @@ for (trait in traits_to_test) {
         ) +
         scale_x_discrete(drop = TRUE) 
       
-      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.svg")), op_plot, width = 7, height = 5,dpi = 600)
+      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5,dpi = 600)
     }
   }
 }
