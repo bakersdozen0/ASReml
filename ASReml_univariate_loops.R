@@ -20,7 +20,7 @@ library(here)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
-#library(svglite)
+library(svglite)
 library(flextable)
 library(officer)
 
@@ -40,7 +40,7 @@ traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
-#traits_to_test <-c("Dre_28","Drs_28")
+#traits_to_test <-c("Fr_05")
 
 # --- 1. SETUP THE SANDBOX DIRECTORY ---
 sandbox_dir <- file.path(trial_folder, "Analyses", run_id)
@@ -126,6 +126,7 @@ for (trait in traits_to_test) {
   raw_data[[trait]] <- suppressWarnings(as.numeric(as.character(raw_data[[trait]])))
   
   trait_variance_list <- list()
+  master_fixed_list <- list()
   
   # Initialize plots for this trait
   blank_plot <- ggplot() + theme_void() + 
@@ -263,7 +264,7 @@ for (trait in traits_to_test) {
     colnames(sln) <- c("Term", "Level", "Estimate", "SE")
     
     
-    # --- NEW: EXTRACT ALL FIXED EFFECTS (ORIGIN & SPATIAL COVARIATES) & WALD P-VALUE ---
+    # --- EXTRACT ALL FIXED EFFECTS (ORIGIN & SPATIAL COVARIATES) & WALD P-VALUE ---
     fixed_terms_to_scrape <- c("Origin", "Edge", "Distright", "Distleft", "Distedge")
     
     for (f_term in fixed_terms_to_scrape) {
@@ -450,9 +451,42 @@ for (trait in traits_to_test) {
            y = "% of Total Variance") +
       theme(legend.position = "right")
     
-    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.svg")), bp, width = 8, height = 6, dpi = 600)
+    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 8, height = 6, dpi = 600)
   }
-  
+  # --- ORIGIN SOLUTIONS PLOT (PER TRAIT) ---
+  if(length(master_fixed_list) > 0) {
+    # 1. Map labels
+    origin_mapping <- c(
+      "1"="Ro_North_HG", "2"="Ro_North_Unk", "3"="Ro_North_WC", 
+      "4"="Ro_South_Unk", "5"="Ro_HG", "6"="Ro_Ledmore", 
+      "7"="Ro_WC", "8"="Ro_Filler"
+    )
+    
+    # 2. Filter for ONLY the current trait and Spatial AR1 results
+    trait_origin_df <- bind_rows(master_fixed_list) %>% 
+      filter(Trait == trait & Model == "Spatial AR1" & Term == "Origin") %>%
+      mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping))
+    
+    # 3. Only plot if we have data for this trait
+    if(nrow(trait_origin_df) > 0) {
+      origin_p <- trait_origin_df$Wald_P_Value[1]
+      
+      op_plot <- ggplot(trait_origin_df, aes(x = Origin_Name, y = Estimate)) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+        geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
+        geom_point(size = 3, color = "darkblue") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        labs(
+          title = paste("Origin Solutions (Spatial AR1):", trait),
+          subtitle = paste("Wald P-value:", origin_p),
+          x = "Origin",
+          y = "Solution Estimate (+/- 1 SE)"
+        )
+      
+      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5, dpi = 600)
+    }
+  }
 }
 
 # 3. EXPORT FINAL MASTER TABLE (Wide-by-Model with Deltas) AND Formatted word document. 
@@ -626,3 +660,33 @@ if(length(master_fixed_list) > 0) {
   cat("SUCCESS! Formatted Portrait Word tables for Fixed Effects saved to 'Analyses'.\n")
 }
 
+#
+#### formally test for whether or not to include edge effects: ####
+# 
+library(tidyverse)
+
+# 1. READ DATA DIRECTLY FROM THE FOLDERS
+base_path <- file.path(trial_folder, "Analyses", "Baseline", "All_Traits_Variance_Summary_Long.csv")
+edge_path <- file.path(trial_folder, "Analyses", "DistEdge", "All_Traits_Variance_Summary_Long.csv")
+
+if(!file.exists(base_path) || !file.exists(edge_path)) stop("Baseline or DistEdge CSVs not found. Check your folder paths.")
+
+base_df <- read.csv(base_path) %>% select(Trait, Model, LogL) %>% distinct()
+edge_df <- read.csv(edge_path) %>% select(Trait, Model, LogL) %>% distinct()
+
+# 2. STRICT JOIN (Pairs Baseline with DistEdge for the SAME Model)
+comparison_results <- base_df %>%
+  rename(LogL_Baseline = LogL) %>%
+  inner_join(
+    edge_df %>% rename(LogL_DistEdge = LogL), 
+    by = c("Trait", "Model") # <--- THIS IS THE FIX. It only joins exact matches.
+  ) %>%
+  mutate(
+    Delta_LogL = LogL_DistEdge - LogL_Baseline,
+    LRT_Stat = 2 * Delta_LogL,
+    Significant = LRT_Stat > 3.84 # Critical value for df=1 at p=0.05
+  )
+
+# 3. PRINT RESULTS
+print(comparison_results)
+write.csv(comparison_results, file.path(trial_folder, "Analyses", "Model_Comparison_Results.csv"), row.names = FALSE)
