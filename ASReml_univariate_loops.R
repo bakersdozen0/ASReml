@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Moary 63"
-project_name  <- "Moray_63_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Ae 58"
+project_name  <- "Ae_58_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -68,19 +68,25 @@ models_to_run <- c("1" = "Design", "2" = "Design+", "3" = "Spatial AR1")
 master_results_list <- list()
 master_fixed_list <- list() # NEW: To hold Origin and other fixed effects
 
-# Calculate Block Boundaries for the Black Outlines & Text Labels
-block_bounds <- raw_data %>%
-  filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block)) %>%
-  group_by(Block) %>%
-  summarize(
-    xmin = min(as.numeric(Ppos), na.rm = TRUE) - 0.5,
-    xmax = max(as.numeric(Ppos), na.rm = TRUE) + 0.5,
-    ymin = min(as.numeric(Prow), na.rm = TRUE) - 0.5,
-    ymax = max(as.numeric(Prow), na.rm = TRUE) + 0.5,
-    # NEW: Calculate the geometric center for the labels
-    x_mid = (xmin + xmax) / 2,
-    y_mid = (ymin + ymax) / 2
+# Refined Theme for high legibility
+theme_trial <- theme_void() + 
+  theme(
+    plot.title = element_text(size = 24, face = "bold", margin = margin(b = 15)),
+    plot.subtitle = element_text(size = 16, color = "black", margin = margin(b = 10)),
+    legend.key.height = unit(2, "cm"),
+    legend.text = element_text(size = 14)
   )
+
+## shared layers for plots: 
+shared_layers <- list(
+  # 1. Internal Block Borders
+  geom_segment(data = h_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 0.8, inherit.aes = FALSE),
+  geom_segment(data = v_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 0.8, inherit.aes = FALSE),
+  # 2. Outer Trial Border (Solid black box around entire trial)
+  geom_rect(data = trial_border, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=2, inherit.aes=FALSE),
+  # 3. Block Labels
+  geom_label(data = block_labels, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 8, fontface = "bold", fill = alpha("white", 0.9), label.size = NA)
+)
 
 ppgmap_colors <- c("darkblue", "blue", "cyan", "green", "yellow", "orange", "red", "darkred")
 
@@ -89,42 +95,24 @@ ppgmap_colors <- c("darkblue", "blue", "cyan", "green", "yellow", "orange", "red
 # 
 for (trait in traits_to_test) {
   cat("\n========================================\nProcessing:", trait, "\n")
-  
   raw_data[[trait]] <- suppressWarnings(as.numeric(as.character(raw_data[[trait]])))
   
-  # NEW: Create a blank failsafe plot that holds its rigid shape!
-  blank_plot <- ggplot() + 
-    theme_void() + 
-    annotate("text", x = 0.5, y = 0.5, label = "Model Did Not Converge", color = "darkred", fontface = "italic", size = 5) +
-    coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) 
-  
-  # Pre-fill the lists with the blanks so the 4-panel grid never collapses
-  res_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
-  sol_plots <- list(blank_plot, blank_plot, blank_plot, blank_plot)
-  trait_variance_list <- list()
-  
-  design_Ve <- NA 
-  design_logL <- NA
+  # Standard border function to keep code clean and identical across all plots
+  add_borders <- list(
+    geom_segment(data = h_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 1, inherit.aes = FALSE),
+    geom_segment(data = v_segments, aes(x = x, xend = xend, y = y, yend = yend), color = "black", size = 1, inherit.aes = FALSE),
+    geom_label(data = block_labels, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 5, fontface = "bold", fill = alpha("white", 0.9), label.size = NA)
+  )
   
   # --- PANEL 1: RAW DATA ---
-  force_breaks <- function(x) { 
-    min_val <- min(x, na.rm = TRUE)
-    max_val <- max(x, na.rm = TRUE)
-    if (!is.finite(min_val) || !is.finite(max_val)) return(c(0, 1)) # Failsafe for all NAs
-    seq(min_val, max_val, length.out = 5) 
-  }
-  
-  format_labels <- function(x) sprintf("%.2f", x)
-  
-  raw_map <- ggplot(raw_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = .data[[trait]])) +
-    geom_tile(color = "black", size = 0.05) + 
-    geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-    scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
-    theme_void() + 
-    theme(legend.key.height = unit(1.5, "cm")) +
-    geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-    scale_y_reverse() + coord_fixed() + labs(title = "1. Raw Data")
-  res_plots[[1]] <- raw_map; sol_plots[[1]] <- raw_map
+  res_plots[[1]] <- ggplot(raw_data, aes(x = Ppos, y = Prow)) +
+    # The grid (color = gray, size = 0.2)
+    geom_tile(aes(fill = .data[[trait]]), color = "lightgray", size = 0.2) + 
+    scale_fill_gradientn(colors = ppgmap_colors, na.value = "lightgray", breaks = force_breaks, labels = format_labels) +
+    # The shared template
+    shared_layers +
+    theme_trial + scale_y_reverse() + coord_fixed() + labs(title = "1. Raw Data")
+  sol_plots[[1]] <- res_plots[[1]]
   
   # --- RUN MODELS ---
   for (part in names(models_to_run)) {
@@ -286,32 +274,29 @@ for (trait in traits_to_test) {
     colnames(yht) <- c("Record", "Yhat", "Residual", "Hat")
     
     map_data <- raw_data %>% 
-      left_join(yht, by = "Record") %>% 
-      mutate(Resid = ifelse(is.na(.data[[trait]]), NA, Residual))
+      left_join(yht, by = "Record") %>%
+      mutate(Resid = Residual)
     
-    if (part == "1") {
-      block_eff <- sln %>% filter(Term == "Block") %>% select(Level, Estimate)
-      map_data <- map_data %>% 
-        mutate(Block_key = as.character(Block)) %>%
-        left_join(block_eff, by = c("Block_key" = "Level")) %>%
-        mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, Estimate))
-      sol_title <- "2. Design (Block Solutions)"
-      
-    } else if (part == "2") {
+    if (part == "1" || part == "2") {
       b_eff <- sln %>% filter(tolower(Term) == "block") %>% select(Level, Estimate)
-      r_eff <- sln %>% filter(tolower(Term) == "block.prow") %>% select(Level, Estimate)
-      p_eff <- sln %>% filter(tolower(Term) == "block.ppos") %>% select(Level, Estimate)
+      # Use a robust regex to catch "Subblock" or "SubBlock" in the raw data
+      sub_col_name <- grep("subblock", colnames(raw_data), ignore.case = TRUE, value = TRUE)
+      
+      sub_eff <- sln %>% filter(tolower(Term) %in% c("block.subblock", "subblock")) %>% select(Level, Estimate)
+      p_eff <- sln %>% filter(tolower(Term) %in% c("plot", "block.plot")) %>% select(Level, Estimate)
       
       map_data <- map_data %>% 
         mutate(
           Block_key = as.character(Block),
-          BProw_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Prow))),
-          BPpos_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Ppos)))
+          # Safely build the Sub_key only if the column actually exists
+          Sub_key = if(length(sub_col_name) > 0) paste(Block, .data[[sub_col_name[1]]], sep=".") else NA,
+          Plot_key = as.character(Plot)
         ) %>%
         left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(B_est = Estimate) %>%
-        left_join(r_eff, by = c("BProw_key" = "Level")) %>% rename(R_est = Estimate) %>%
-        left_join(p_eff, by = c("BPpos_key" = "Level")) %>% rename(P_est = Estimate) %>%
-        mutate(D_Sum = replace_na(B_est,0) + replace_na(R_est,0) + replace_na(P_est,0))
+        left_join(sub_eff, by = c("Sub_key" = "Level")) %>% rename(Sub_est = Estimate) %>%
+        left_join(p_eff, by = c("Plot_key" = "Level")) %>% rename(P_est = Estimate) %>%
+        mutate(D_Sum = replace_na(B_est,0) + replace_na(Sub_est,0) + replace_na(P_est,0))
+      
       
       # --- NEW: DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
       env_terms <- c("Edge", "Distright", "Distleft", "Distedge")
@@ -346,23 +331,32 @@ for (trait in traits_to_test) {
       sol_title <- "4. Spatial Effects Correction"
     }
     
-    sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = PlotVal)) +
-      geom_tile(color = "black", size = 0.05) + 
-      geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
-      theme_void() + 
-      theme(legend.key.height = unit(1.5, "cm"), plot.subtitle = element_text(size = 8)) +
-      geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + coord_fixed() + labs(title = sol_title, subtitle = metrics_subtitle)
+    # 1. Update the Data Formatting
+    # Ensure Prow and Ppos are numeric and Block is integer for plotting consistency
+    map_data <- map_data %>%
+      mutate(
+        Prow = as.numeric(Prow),
+        Ppos = as.numeric(Ppos),
+        Block = as.integer(Block)
+      )
     
-    res_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = as.numeric(Ppos), y = as.numeric(Prow), fill = Resid)) +
-      geom_tile(color = "black", size = 0.05) + 
-      geom_rect(data = block_bounds, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill=NA, color="black", size=0.8, inherit.aes=FALSE) +
-      scale_fill_gradientn(colors = ppgmap_colors, na.value = "grey90", breaks = force_breaks, labels = format_labels) +
-      theme_void() + 
-      theme(legend.key.height = unit(1.5, "cm"), plot.subtitle = element_text(size = 8)) +
-      geom_label(data = block_bounds, aes(x = x_mid, y = y_mid, label = Block), inherit.aes = FALSE, size = 4, fontface = "bold", fill = alpha("white", 0.6), label.size = NA) +
-      scale_y_reverse() + coord_fixed() + labs(title = paste0(as.numeric(part)+1, ". ", model_name, " Res"), subtitle = metrics_subtitle)
+    # 2. Define the plot
+    # Notice the explicit inherit.aes = FALSE in the border layer
+    sol_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = Ppos, y = Prow)) +
+      # The grid
+      geom_tile(aes(fill = PlotVal), color = "lightgray", size = 0.2) +
+      scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
+      # The shared template
+      shared_layers +
+      theme_trial + scale_y_reverse() + coord_fixed() + labs(title = model_name, subtitle = metrics_subtitle)
+    
+    res_plots[[as.numeric(part) + 1]] <- ggplot(map_data, aes(x = Ppos, y = Prow)) +
+      # The grid
+      geom_tile(aes(fill = Resid), color = "lightgray", size = 0.2) +
+      scale_fill_gradientn(colors = ppgmap_colors, na.value = "white", breaks = force_breaks, labels = format_labels) +
+      # The shared template
+      shared_layers +
+      theme_trial + scale_y_reverse() + coord_fixed() + labs(title = paste(model_name, "Resid"), subtitle = metrics_subtitle)
     
     # --- 4. CLEAN THE SANDBOX FOR THE NEXT LOOP ---
     file.remove(sandbox_asr)
