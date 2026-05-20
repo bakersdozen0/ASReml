@@ -2,8 +2,8 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Ae 58"
-project_name  <- "Ae_58_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Brecon 8"
+project_name  <- "Brecon_8_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -40,7 +40,7 @@ traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
 cat("Automated Discovery: Found", length(found_traits), "potential matches.\n")
 cat("Guard Rail: Proceeding with", length(traits_to_test), "traits found in CSV.\n")
 
-#traits_to_test <-c("Fr_05")
+# traits_to_test <-c("Ht_06")
 
 # --- 1. SETUP THE SANDBOX DIRECTORY ---
 sandbox_dir <- file.path(trial_folder, "Analyses", run_id)
@@ -71,7 +71,10 @@ master_fixed_list <- list() # NEW: To hold Origin and other fixed effects
 # --- MAPPING CALCULATIONS & THEMES ---
 # Calculate the geometric center for labels
 block_labels <- raw_data %>%
-  filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block) & Block != 0 & as.character(Block) != "") %>%
+  filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block) & 
+           as.character(Block) != "0" & 
+           as.character(Block) != "" & 
+           as.character(Block) != ".") %>% 
   group_by(Block) %>%
   summarize(
     x_mid = mean(as.numeric(Ppos), na.rm = TRUE),
@@ -172,6 +175,40 @@ for (trait in traits_to_test) {
     }
     cat("Success\n")
     
+    # --- NEW: DIAGNOSTIC WARNING SCRAPER ---
+    cat("      [Diagnostics]:")
+    
+    # 1. End-of-file warnings (e.g., Parameters Not Converged)
+    finish_line <- grep("Finished:", asr_lines, value = TRUE)
+    if(length(finish_line) > 0 && grepl("Warning|Error", finish_line[1], ignore.case = TRUE)) {
+      warn_msg <- trimws(sub(".*Finished:.*(Warning:|Error:)", "\\1", finish_line[1], ignore.case=TRUE))
+      cat("\n        -> RUN MSG: ", warn_msg)
+    }
+    
+    # 2. Design Singularities
+    sing_lines <- grep("singularities detected", asr_lines, ignore.case = TRUE, value = TRUE)
+    if(length(sing_lines) > 0) {
+      cat("\n        ->", trimws(sing_lines[1]))
+    }
+    
+    # 3. Variance Component Boundaries (B, ?, S)
+    mt_start <- grep("Model_Term", asr_lines, ignore.case = TRUE)
+    wald_start <- grep("Wald F statistics", asr_lines, ignore.case = TRUE)
+    
+    if(length(mt_start) > 0) {
+      end_idx <- ifelse(length(wald_start) > 0, wald_start[1] - 1, length(asr_lines))
+      vc_table <- asr_lines[mt_start[1]:end_idx]
+      
+      # Regex: Look for rows ending with B, ?, or S (accounting for trailing spaces)
+      bad_vc <- grep("\\s+[B\\?S]\\s*$", vc_table, value = TRUE)
+      
+      if(length(bad_vc) > 0) {
+        cat("\n        -> BOUNDARY/SINGULAR COMPONENTS DETECTED:")
+        for(b in bad_vc) cat("\n             ", trimws(b))
+      }
+    }
+    cat("\n")
+    
     # --- 3. SAFELY RENAME FILES ---
     out_asr <- paste0(trait, "_", model_name, ".asr")
     out_yht <- paste0(trait, "_", model_name, ".yht")
@@ -223,18 +260,26 @@ for (trait in traits_to_test) {
         }
       }
     }
-    
     current_vars_df <- bind_rows(current_model_vars)
     
     if (part == "1") {
+      # 1. Baseline Model
       design_logL <- logl_val
+      d_logL <- "Base" # Set text for the subtitle instead of a number
       ve_row <- current_vars_df %>% filter(Term == "Independent Error")
       design_Ve <- if(nrow(ve_row) > 0) ve_row %>% pull(Variance) %>% .[1] else 1
+      
+    } else if (part == "2") {
+      # 2. Design+ Model (Compared to Baseline Design)
+      designplus_logL <- logl_val
+      d_logL <- round(logl_val - design_logL, 2)
+      
+    } else if (part == "3") {
+      # 3. Spatial AR1 Model (Compared to Design+)
+      d_logL <- round(logl_val - designplus_logL, 2)
     }
     
-    d_logL <- round(logl_val - design_logL, 2)
     curr_Ve_raw <- current_vars_df %>% filter(Term == "Independent Error") %>% pull(Variance) %>% .[1]
-    
     var_text_list <- current_vars_df %>%
       mutate(Pct = round((Variance / design_Ve) * 100, 1)) %>%
       mutate(Text = paste0(Term, ": ", Pct, "%")) %>%
