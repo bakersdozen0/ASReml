@@ -12,8 +12,8 @@ dms_xml_file  <- "Brecon_8_S.xml" # The master parent XML from Dataplan
 
 # ---> SPECIFY WHAT YOU WANT TO ADJUST HERE <---
 target_run_id <- "Baseline"  # The folder to read solutions from: Use vocab "Baseline" "Edge_correction"
-target_trait  <- "Pil_17"         # The specific trait to adjust
-target_model  <- "Spatial AR1"      # "Design", "Design+", or "Spatial AR1"
+target_trait  <- "Pil_16"         # The specific trait to adjust
+target_model  <- "Design+"      # "Design", "Design+", or "Spatial AR1"
 # ----------------------------------------------
 
 # 1. SETUP PATHS & READ RAW DATA ####

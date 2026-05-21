@@ -2,10 +2,10 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kielder 162"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Brecon 8"
 ## "Backwards Selected Fullsib P96-P99 experiments" or  "High GCA Fullsib P85-P87 experiments" or "Trials" (for SP)
 
-project_name  <- "Kielder_162_S"
+project_name  <- "Brecon_8_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -371,6 +371,11 @@ for (trait in traits_to_test) {
     
     if (part == "1" || part == "2") {
       b_eff <- sln %>% filter(tolower(Term) == "block") %>% select(Level, Estimate)
+      
+      # --- NEW: Grab Row and Col effects for Design+ ---
+      r_eff <- sln %>% filter(tolower(Term) == "block.prow") %>% select(Level, Estimate)
+      c_eff <- sln %>% filter(tolower(Term) == "block.ppos") %>% select(Level, Estimate)
+      
       # Use a robust regex to catch "Subblock" or "SubBlock" in the raw data
       sub_col_name <- grep("subblock", colnames(raw_data), ignore.case = TRUE, value = TRUE)
       plot_col_name <- grep("^plot$", colnames(raw_data), ignore.case = TRUE, value = TRUE)
@@ -383,14 +388,22 @@ for (trait in traits_to_test) {
           Block_key = as.character(Block),
           # Safely build keys only if the columns actually exist in the CSV
           Sub_key = if(length(sub_col_name) > 0) paste(Block, .data[[sub_col_name[1]]], sep=".") else NA,
-          Plot_key = if(length(plot_col_name) > 0) as.character(.data[[plot_col_name[1]]]) else NA # NEW FIX
+          Plot_key = if(length(plot_col_name) > 0) as.character(.data[[plot_col_name[1]]]) else NA,
+          # --- NEW: Build the Row and Col keys ---
+          BProw_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Prow))),
+          BPpos_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Ppos)))
         ) %>%
         left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(B_est = Estimate) %>%
         left_join(sub_eff, by = c("Sub_key" = "Level")) %>% rename(Sub_est = Estimate) %>%
         left_join(p_eff, by = c("Plot_key" = "Level")) %>% rename(P_est = Estimate) %>%
-        mutate(D_Sum = replace_na(B_est,0) + replace_na(Sub_est,0) + replace_na(P_est,0))
-      
-      # ---  DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
+        # --- NEW: Join Row and Col estimates ---
+        left_join(r_eff, by = c("BProw_key" = "Level")) %>% rename(Row_Est = Estimate) %>%
+        left_join(c_eff, by = c("BPpos_key" = "Level")) %>% rename(Col_Est = Estimate) %>%
+        # --- NEW: Add them all into the D_Sum ---
+        mutate(D_Sum = replace_na(B_est,0) + replace_na(Sub_est,0) + replace_na(P_est,0) + replace_na(Row_Est,0) + replace_na(Col_Est,0))
+
+            
+    # ---  DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
       env_terms <- c("Edge", "Distright", "Distleft", "Distedge")
       for (e_term in env_terms) {
         term_idx <- tolower(sln$Term) == tolower(e_term)
