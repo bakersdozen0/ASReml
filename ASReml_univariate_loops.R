@@ -69,6 +69,17 @@ master_results_list <- list()
 master_fixed_list <- list() # NEW: To hold Origin and other fixed effects
 
 # --- MAPPING CALCULATIONS & THEMES ---
+## calculate min and max values for legend: 
+force_breaks <- function(x) { 
+  min_val <- min(x, na.rm = TRUE)
+  max_val <- max(x, na.rm = TRUE)
+  if (!is.finite(min_val) || !is.finite(max_val)) return(c(0, 1)) # Failsafe for all NAs
+  seq(min_val, max_val, length.out = 5) 
+}
+format_labels <- function(x) {
+  round(x, 2) # Rounds the exact min/max to 2 decimal places so the legend stays clean
+}
+
 # Calculate the geometric center for labels
 block_labels <- raw_data %>%
   filter(!is.na(Ppos) & !is.na(Prow) & !is.na(Block) & 
@@ -376,7 +387,7 @@ for (trait in traits_to_test) {
         mutate(D_Sum = replace_na(B_est,0) + replace_na(Sub_est,0) + replace_na(P_est,0))
       
       
-      # --- NEW: DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
+      # ---  DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
       env_terms <- c("Edge", "Distright", "Distleft", "Distedge")
       for (e_term in env_terms) {
         term_idx <- tolower(sln$Term) == tolower(e_term)
