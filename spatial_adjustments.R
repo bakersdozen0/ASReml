@@ -54,17 +54,20 @@ colnames(sln) <- c("Term", "Level", "Estimate", "SE")
 # Use tolower() to protect against ASReml's random capitalizations
 b_eff <- sln %>% filter(tolower(Term) == "block") %>% select(Level, Estimate)
 r_eff <- sln %>% filter(tolower(Term) == "block.prow") %>% select(Level, Estimate)
-p_eff <- sln %>% filter(tolower(Term) == "block.ppos") %>% select(Level, Estimate)
+c_eff <- sln %>% filter(tolower(Term) == "block.ppos") %>% select(Level, Estimate)
+p_eff <- sln %>% filter(tolower(Term) %in% c("plot", "block.plot")) %>% select(Level, Estimate) # NEW
 
 adj_data <- raw_data %>% 
   mutate(
     Block_key = as.character(Block),
     BProw_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Prow))),
-    BPpos_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Ppos)))
+    BPpos_key = sprintf("%d.%03d", suppressWarnings(as.integer(Block)), suppressWarnings(as.integer(Ppos))),
+    Plot_key  = as.character(Plot) # NEW
   ) %>%
   left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(Block_Est = Estimate) %>%
   left_join(r_eff, by = c("BProw_key" = "Level")) %>% rename(Row_Est = Estimate) %>%
-  left_join(p_eff, by = c("BPpos_key" = "Level")) %>% rename(Col_Est = Estimate)
+  left_join(c_eff, by = c("BPpos_key" = "Level")) %>% rename(Col_Est = Estimate) %>%
+  left_join(p_eff, by = c("Plot_key" = "Level")) %>% rename(Plot_Est = Estimate) # NEW
 
 # --- NEW: DYNAMIC EDGE & COVARIATE ADDER ---
 env_terms <- c("Edge", "Distright", "Distleft", "Distedge") # Add any other spatial modifiers here
@@ -107,13 +110,13 @@ if (target_model == "Spatial AR1") {
     left_join(yht, by = "Record") %>%
     mutate(
       # Notice we now add the Extra_Env_Sum into the Design_Sum
-      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0) + Extra_Env_Sum,
+      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0) + replace_na(Plot_Est, 0) + Extra_Env_Sum,
       Local_Trend = replace_na(Residual, 0)
     )
 } else {
   adj_data <- adj_data %>%
     mutate(
-      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0) + Extra_Env_Sum,
+      Design_Sum = replace_na(Block_Est, 0) + replace_na(Row_Est, 0) + replace_na(Col_Est, 0) + replace_na(Plot_Est, 0) + Extra_Env_Sum,
       Local_Trend = 0
     )
 }

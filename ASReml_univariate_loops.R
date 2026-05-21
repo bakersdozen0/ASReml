@@ -152,6 +152,7 @@ for (trait in traits_to_test) {
   
   design_Ve <- NA 
   design_logL <- NA
+  designplus_logL <- NA
   
    # --- PANEL 1: RAW DATA ---
   res_plots[[1]] <- ggplot(raw_data, aes(x = Ppos, y = Prow)) +
@@ -276,18 +277,18 @@ for (trait in traits_to_test) {
     if (part == "1") {
       # 1. Baseline Model
       design_logL <- logl_val
-      d_logL <- "Base" # Set text for the subtitle instead of a number
+      d_logL <- "Base"
       ve_row <- current_vars_df %>% filter(Term == "Independent Error")
       design_Ve <- if(nrow(ve_row) > 0) ve_row %>% pull(Variance) %>% .[1] else 1
       
     } else if (part == "2") {
-      # 2. Design+ Model (Compared to Baseline Design)
+      # 2. Design+ Model
       designplus_logL <- logl_val
-      d_logL <- round(logl_val - design_logL, 2)
+      d_logL <- if(!is.na(design_logL)) round(logl_val - design_logL, 2) else "NA (Base Failed)"
       
     } else if (part == "3") {
-      # 3. Spatial AR1 Model (Compared to Design+)
-      d_logL <- round(logl_val - designplus_logL, 2)
+      # 3. Spatial AR1 Model
+      d_logL <- if(!is.na(designplus_logL)) round(logl_val - designplus_logL, 2) else "NA (Design+ Failed)"
     }
     
     curr_Ve_raw <- current_vars_df %>% filter(Term == "Independent Error") %>% pull(Variance) %>% .[1]
@@ -409,15 +410,13 @@ for (trait in traits_to_test) {
       
       map_data <- map_data %>% 
         mutate(PlotVal = ifelse(is.na(.data[[trait]]), NA, D_Sum))
-      sol_title <- "3. Design+ (Blk+Row+Col+Edge Solutions)"
-      
+
     } else {
       map_data <- map_data %>% 
         mutate(
           PlotVal = ifelse(is.na(.data[[trait]]), NA, Resid), 
           Resid = ifelse(is.na(.data[[trait]]), NA, yht$Yhat - mean(yht$Yhat, na.rm=TRUE)) 
         )
-      sol_title <- "4. Spatial Effects Correction"
     }
     
    # Define the plot
@@ -597,21 +596,17 @@ if(length(master_results_list) > 0) {
     arrange(Trait, desc(Term == "LogL"), Term)
   
   trait_list <- split(df_calc, df_calc$Trait)
-  spaced_list <- lapply(names(trait_list), function(tr) {
-    blank_row <- df_calc[1, ]
-    blank_row[1, ] <- NA
-    blank_row$Trait <- paste(">>> TRAIT:", tr, "<<<")
-    bind_rows(blank_row, trait_list[[tr]])
-  })
-  
-  final_table <- bind_rows(spaced_list)
+
   
   df_long_export <- df_base %>%
     mutate(Trial = project_name) %>%
     select(Trial, Trait, Model, Term, Variance, LogL) 
   
+  # 1. Save the Machine-Readable Long Version
   write.csv(df_long_export, file.path(out_dir, "All_Traits_Variance_Summary_Long.csv"), row.names = FALSE, na = "")
-  cat("\nSUCCESS! Machine-readable Long CSV saved to 'Analyses'.\n")
+  
+  # 2. NEW: Save the Human-Readable Wide Version (with Deltas)
+  write.csv(df_calc, file.path(out_dir, "All_Traits_Variance_Summary_Wide_Deltas.csv"), row.names = FALSE, na = "")
   
   doc <- read_docx()
   trait_list <- split(df_calc, df_calc$Trait)
