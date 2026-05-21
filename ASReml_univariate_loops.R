@@ -2,8 +2,10 @@
 # 0. CONTROL PANEL (Change these for your specific project) #### 
 # 
 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Brecon 8"
-project_name  <- "Brecon_8_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kielder 162"
+## "Backwards Selected Fullsib P96-P99 experiments" or  "High GCA Fullsib P85-P87 experiments" or "Trials" (for SP)
+
+project_name  <- "Kielder_162_S"
 as_file       <- paste0(project_name, ".as")
 csv_file      <- paste0(project_name, ".csv")
 
@@ -370,6 +372,7 @@ for (trait in traits_to_test) {
       b_eff <- sln %>% filter(tolower(Term) == "block") %>% select(Level, Estimate)
       # Use a robust regex to catch "Subblock" or "SubBlock" in the raw data
       sub_col_name <- grep("subblock", colnames(raw_data), ignore.case = TRUE, value = TRUE)
+      plot_col_name <- grep("^plot$", colnames(raw_data), ignore.case = TRUE, value = TRUE)
       
       sub_eff <- sln %>% filter(tolower(Term) %in% c("block.subblock", "subblock")) %>% select(Level, Estimate)
       p_eff <- sln %>% filter(tolower(Term) %in% c("plot", "block.plot")) %>% select(Level, Estimate)
@@ -377,15 +380,14 @@ for (trait in traits_to_test) {
       map_data <- map_data %>% 
         mutate(
           Block_key = as.character(Block),
-          # Safely build the Sub_key only if the column actually exists
+          # Safely build keys only if the columns actually exist in the CSV
           Sub_key = if(length(sub_col_name) > 0) paste(Block, .data[[sub_col_name[1]]], sep=".") else NA,
-          Plot_key = as.character(Plot)
+          Plot_key = if(length(plot_col_name) > 0) as.character(.data[[plot_col_name[1]]]) else NA # NEW FIX
         ) %>%
         left_join(b_eff, by = c("Block_key" = "Level")) %>% rename(B_est = Estimate) %>%
         left_join(sub_eff, by = c("Sub_key" = "Level")) %>% rename(Sub_est = Estimate) %>%
         left_join(p_eff, by = c("Plot_key" = "Level")) %>% rename(P_est = Estimate) %>%
         mutate(D_Sum = replace_na(B_est,0) + replace_na(Sub_est,0) + replace_na(P_est,0))
-      
       
       # ---  DYNAMIC EDGE SCRAPER FOR VISUAL MAPS ---
       env_terms <- c("Edge", "Distright", "Distleft", "Distedge")
