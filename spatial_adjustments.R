@@ -6,13 +6,13 @@ library(tidyverse)
 library(xml2) 
 
 # 0. CONTROL PANEL #### 
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/Backwards Selected Fullsib P96-P99 experiments/Kielder 162"
-csv_file      <- "Kielder_162_S.csv"
-dms_xml_file  <- "Kielder_162_DMS.xml" # The master parent XML from Dataplan
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Brecon 8"
+csv_file      <- "Brecon_8_S.csv"
+dms_xml_file  <- "Brecon_8_S.xml" # The master parent XML from Dataplan
 
 # ---> SPECIFY WHAT YOU WANT TO ADJUST HERE <---
 target_run_id <- "Baseline"  # The folder to read solutions from: Use vocab "Baseline" "Edge_correction"
-target_trait  <- "Drs_28"         # The specific trait to adjust
+target_trait  <- "Pil_17"         # The specific trait to adjust
 target_model  <- "Spatial AR1"      # "Design", "Design+", or "Spatial AR1"
 # ----------------------------------------------
 
