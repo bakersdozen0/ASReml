@@ -180,3 +180,23 @@ xml_content <- paste0(
 writeLines(xml_content, file.path(out_dir, paste0(out_name_base, ".XML")))
 
 cat("SUCCESS! Minimal CSV and XML saved to master Analyses folder.\n")
+
+# ==============================================================================
+# 7. APPEND TO MASTER RUN LOG ####
+# ==============================================================================
+
+log_file <- file.path(out_dir, "Adjusted_Traits_Manifest.txt")
+
+# Create the clean single-line entry for this run
+log_entry <- sprintf("Trait: %-15s | Model Used: %-15s | Run ID: %-15s | Timestamp: %s", 
+                     target_trait, target_model, target_run_id, format(Sys.time(), "%Y-%m-%d %H:%M"))
+
+# Append to the text file (creates it if it doesn't exist)
+write(log_entry, file = log_file, append = TRUE)
+
+# Print the entire historic manifest clearly to the console so you see the big picture
+cat("\n========================================\n")
+cat("      CURRENT ADJUSTMENT MANIFEST       \n")
+cat("========================================\n")
+cat(readLines(log_file), sep = "\n")
+cat("========================================\n")
