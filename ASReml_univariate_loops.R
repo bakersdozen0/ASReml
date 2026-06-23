@@ -23,6 +23,8 @@ format_labels <- function(x) { round(x, 2) }
 as_text <- paste(readLines(file.path(trial_folder, as_file)), collapse = " ")
 found_traits <- unique(unlist(str_extract_all(as_text, "\\b[A-Za-z0-9]+_[0-9]+\\b")))
 traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
+# Filter out "Sur_" traits: The "^" ensures it only looks at the start of the string
+traits_to_test <- traits_to_test[!grepl("^Sur_", traits_to_test, ignore.case = TRUE)]
 
 # FILTER OUT SURVIVAL TRAITS
 # The "^" ensures it only looks at the start of the string
