@@ -3,8 +3,8 @@
 # ==============================================================================
 
 # 1. PATHS & DIRECTORIES ####
-trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Brecon 8"
-project_name  <- "Brecon_8_S"
+trial_folder  <- "C:/Users/james.baker/Forest Research/TW CBC-TBA-NextGenBritishConifers - Share/Sitka/High GCA Fullsib P85-P87 experiments/Brecon 15"
+project_name  <- "Brecon_15_S"
 run_id        <- "Baseline"
 
 # Path to ASReml Standalone
@@ -34,6 +34,7 @@ target_model  <- "Design+"   # "Design", "Design+", or "Spatial AR1"
 # 5. EXECUTE THE ENGINES
 # Run the engine you want to run for this session.
 # ==============================================================================
-
 source(here("ASReml_univariate_loops.R"))
+
+
 source(here("spatial_adjustments.R"))

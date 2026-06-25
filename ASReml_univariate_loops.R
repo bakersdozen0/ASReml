@@ -23,8 +23,6 @@ format_labels <- function(x) { round(x, 2) }
 as_text <- paste(readLines(file.path(trial_folder, as_file)), collapse = " ")
 found_traits <- unique(unlist(str_extract_all(as_text, "\\b[A-Za-z0-9]+_[0-9]+\\b")))
 traits_to_test <- found_traits[found_traits %in% colnames(raw_data)]
-# Filter out "Sur_" traits: The "^" ensures it only looks at the start of the string
-traits_to_test <- traits_to_test[!grepl("^Sur_", traits_to_test, ignore.case = TRUE)]
 
 # FILTER OUT SURVIVAL TRAITS
 # The "^" ensures it only looks at the start of the string
@@ -165,16 +163,37 @@ for (trait in traits_to_test) {
     # Assign Delta LogL based on the correct baseline
     if (part == "1") { 
       design_logL <- logl_val; d_logL <- "Base"
-      ve_row <- current_vars_df %>% filter(Term == "Independent Error")
-      design_Ve <- if(nrow(ve_row) > 0) ve_row %>% pull(Variance) %>% .[1] else 1
-    } else if (part == "2") { 
-      designplus_logL <- logl_val
-      d_logL <- if(!is.na(design_logL)) round(logl_val - design_logL, 2) else "NA (Base Failed)"
-    } else if (part == "3") { 
-      d_logL <- if(!is.na(designplus_logL)) round(logl_val - designplus_logL, 2) else "NA (Design+ Failed)" 
+      ve_row <- current_vars_df %>% filter(Term %in% c("Independent Error", "Spatial Variance"))
+      # Bulletproof fallback: sum the variances instead of defaulting to 1
+      design_Ve <- if(nrow(ve_row) > 0) ve_row %>% pull(Variance) %>% .[1] else sum(current_vars_df$Variance, na.rm=TRUE)
+      
+      design_Ve_current <- design_Ve
+      
+    } else {
+      # Fallback: If Model 1 failed, don't leak previous traits. Use current model's Ve.
+      if(is.na(design_Ve)) {
+        ve_fallback <- current_vars_df %>% filter(Term %in% c("Independent Error", "Spatial Variance"))
+        design_Ve_current <- if(nrow(ve_fallback) > 0) ve_fallback %>% pull(Variance) %>% .[1] else sum(current_vars_df$Variance, na.rm=TRUE)
+      } else {
+        design_Ve_current <- design_Ve
+      }
+      
+      if (part == "2") { 
+        designplus_logL <- logl_val
+        d_logL <- if(!is.na(design_logL)) round(logl_val - design_logL, 2) else "NA (Base Failed)"
+      } else if (part == "3") { 
+        d_logL <- if(!is.na(designplus_logL)) round(logl_val - designplus_logL, 2) else "NA (Design+ Failed)" 
+      }
     }
     
-    var_string <- str_wrap(paste(current_vars_df %>% mutate(Text = paste0(Term, ": ", round((Variance / design_Ve) * 100, 1), "%")) %>% pull(Text), collapse = " | "), width = 75)
+    # Calculate the Total Phenotypic Variance (Vp) for the current model
+    current_Vp <- sum(current_vars_df$Variance, na.rm = TRUE)
+    
+    # Calculate percentages relative to the Total Variance (Vp), matching Section G
+    var_string <- str_wrap(paste(current_vars_df %>% 
+                                   mutate(Text = paste0(Term, ": ", round((Variance / current_Vp) * 100, 1), "%")) %>% 
+                                   pull(Text), collapse = " | "), width = 75)
+    
     metrics_subtitle <- paste0("dLogL: ", d_logL, " | Raw Ve: ", round(current_vars_df %>% filter(Term == "Independent Error") %>% pull(Variance) %>% .[1], 3), "\n", var_string)
     
     if (part == "3") {
@@ -279,9 +298,26 @@ if(length(master_results_list) > 0) {
   # Flextable Generation
   doc <- read_docx(); trait_list <- split(df_calc, df_calc$Trait)
   for (tr in names(trait_list)) {
-    ft <- flextable(trait_list[[tr]] %>% select(-Trait) %>% mutate(across(starts_with("Pct"), ~ ifelse(is.na(.), "", sprintf("%.1f%%", . * 100)))) %>% mutate(across(where(is.numeric), ~ ifelse(is.na(.), "", sprintf("%.3f", .))))) %>% theme_booktabs() %>% fontsize(size = 9, part = "all") %>% padding(padding = 3, part = "all") %>% set_header_labels(Variance_Design = "Var\nDesign", `Variance_Design+` = "Var\nDesign+", `Variance_Spatial AR1` = "Var\nSpatial", `Delta_Design+` = "Delta\nDesign+", Delta_Spatial = "Delta\nSpatial", Pct_Design = "%\nDesign", `Pct_Design+` = "%\nDesign+", `Pct_Spatial AR1` = "%\nSpatial", `Pct_Delta_Design+` = "% Delta\nDesign+", Pct_Delta_Spatial = "% Delta\nSpatial") %>% autofit() %>% align(j = "Term", align = "left", part = "all") %>% align(j = 2:ncol(trait_list[[tr]]), align = "center", part = "all")
+    
+    # 1. Prepare the data by dropping 'Trait' first so column counts are true
+    table_data <- trait_list[[tr]] %>% select(-Trait)
+    num_cols <- ncol(table_data)
+    
+    # 2. Build the table using the safe dynamic boundary
+    ft <- flextable(table_data %>% 
+                      mutate(across(starts_with("Pct"), ~ ifelse(is.na(.), "", sprintf("%.1f%%", . * 100)))) %>% 
+                      mutate(across(where(is.numeric), ~ ifelse(is.na(.), "", sprintf("%.3f", .))))) %>% 
+      theme_booktabs() %>% 
+      fontsize(size = 9, part = "all") %>% 
+      padding(padding = 3, part = "all") %>% 
+      set_header_labels(Variance_Design = "Var\nDesign", `Variance_Design+` = "Var\nDesign+", `Variance_Spatial AR1` = "Var\nSpatial", `Delta_Design+` = "Delta\nDesign+", Delta_Spatial = "Delta\nSpatial", Pct_Design = "%\nDesign", `Pct_Design+` = "%\nDesign+", `Pct_Spatial AR1` = "%\nSpatial", `Pct_Delta_Design+` = "% Delta\nDesign+", Pct_Delta_Spatial = "% Delta\nSpatial") %>% 
+      autofit() %>% 
+      align(j = "Term", align = "left", part = "all") %>% 
+      align(j = 2:num_cols, align = "center", part = "all") # FIX: Safely targets exactly what's available
+    
     doc <- doc %>% body_add_par(paste("Trait:", tr), style = "heading 2") %>% body_add_flextable(value = ft, align = "left") %>% body_add_par("", style = "Normal") 
   }
+  
   print(doc %>% body_end_section_landscape(), target = file.path(out_dir, "All_Traits_Variance_Summary_Formatted.docx"))
 }
 
