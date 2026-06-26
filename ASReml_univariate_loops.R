@@ -274,13 +274,78 @@ for (trait in traits_to_test) {
     file.remove(sandbox_asr); if(file.exists(sandbox_yht)) file.remove(sandbox_yht); if(file.exists(sandbox_sln)) file.remove(sandbox_sln)
   }
   
-  # --- F. CANVAS SAVING ---
-  # Dynamic 4-Panel Plot Sizing (Tile-Based Scaling)
+  # --- F. CANVAS SAVING & TRAIT-LEVEL PLOTS ---
   if(length(res_plots) == 4) {
     dyn_width  <- max(((max(raw_data$Ppos, na.rm = TRUE) - min(raw_data$Ppos, na.rm = TRUE) + 1) * 0.15 * 2) + 2.5, 10)
     dyn_height <- max(((max(raw_data$Prow, na.rm = TRUE) - min(raw_data$Prow, na.rm = TRUE) + 1) * 0.15 * 2) + 2.5, 7)
     ggsave(file.path(out_dir, paste0(trait, "_4Panel_RESIDUALS.svg")), (res_plots[[1]] | res_plots[[2]]) / (res_plots[[3]] | res_plots[[4]]) + plot_annotation(title = paste(project_name, "- Trait:", trait), theme = theme(plot.title = element_text(size = 18, face = "bold"))), width = dyn_width, height = dyn_height, dpi = 600)
     ggsave(file.path(out_dir, paste0(trait, "_4Panel_SOLUTIONS.svg")), (sol_plots[[1]] | sol_plots[[2]]) / (sol_plots[[3]] | sol_plots[[4]]) + plot_annotation(title = paste(project_name, "- Trait:", trait), theme = theme(plot.title = element_text(size = 18, face = "bold"))), width = dyn_width, height = dyn_height, dpi = 600)
+  }
+  
+  # --- INTEGRATED BARPLOT SECTION ---
+  if(length(trait_variance_list) > 0) {
+    # Match the mapped strings used in Engine 1
+    expected_terms <- c("Block", "SubBlock", "Block.SubBlock", "Block.Prow", 
+                        "Block.Ppos", "Prow", "Ppos", "Plot", "Tree", "Family_id", 
+                        "Family_name", "uni(Crosstype,2)", "Spatial Variance", "Independent Error")
+    
+    trait_df <- bind_rows(trait_variance_list) %>% 
+      group_by(Model, Term) %>% 
+      slice_tail(n = 1) %>%  
+      ungroup() %>%
+      filter(Term %in% expected_terms) %>% 
+      group_by(Model) %>%
+      mutate(
+        Total_Var_In_Model = sum(Variance, na.rm = TRUE),
+        Pct_Var = (Variance / Total_Var_In_Model) * 100
+      ) %>% 
+      ungroup()
+    
+    trait_df$Model <- factor(trait_df$Model, levels = c("Design", "Design+", "Spatial AR1"))
+    trait_df$Term <- factor(trait_df$Term, levels = expected_terms)
+    
+    bp <- ggplot(trait_df, aes(x = Model, y = Pct_Var, fill = Term)) +
+      geom_col(color = "black", size = 0.2) + 
+      geom_hline(yintercept = 100, linetype = "dashed", color = "black", size = 0.5) +
+      theme_minimal() + 
+      scale_fill_brewer(palette = "Set3", na.translate = FALSE) + # Drop any missing factor entries safely
+      labs(title = paste("Variance Components:", trait), 
+           y = "% of Total Variance") +
+      theme(legend.position = "right")
+    
+    ggsave(file.path(out_dir, paste0(trait, "_VC_Barplot.png")), bp, width = 8, height = 6, dpi = 600)
+  }
+  
+  # --- INTEGRATED ORIGIN SOLUTIONS PLOT (PER TRAIT) ---
+  if(length(master_fixed_list) > 0) {
+    origin_mapping <- c(
+      "1"="Ro_North_HG", "2"="Ro_North_Unk", "3"="Ro_North_WC", 
+      "4"="Ro_South_Unk", "5"="Ro_HG", "6"="Ro_Ledmore", 
+      "7"="Ro_WC", "8"="Ro_Filler"
+    )
+    
+    trait_origin_df <- bind_rows(master_fixed_list) %>% 
+      filter(Trait == trait & Model == "Spatial AR1" & tolower(Term) == "origin") %>%
+      mutate(Origin_Name = factor(origin_mapping[as.character(Level)], levels = origin_mapping))
+    
+    if(nrow(trait_origin_df) > 0) {
+      origin_p <- trait_origin_df$Wald_P_Value[1]
+      
+      op_plot <- ggplot(trait_origin_df, aes(x = Origin_Name, y = Estimate)) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+        geom_errorbar(aes(ymin = Estimate - SE, ymax = Estimate + SE), width = 0.2, color = "darkblue") +
+        geom_point(size = 3, color = "darkblue") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        labs(
+          title = paste("Origin Solutions (Spatial AR1):", trait),
+          subtitle = paste("Wald P-value:", origin_p),
+          x = "Origin",
+          y = "Solution Estimate (+/- 1 SE)"
+        )
+      
+      ggsave(file.path(out_dir, paste0(trait, "_Origin_Plot.png")), op_plot, width = 7, height = 5, dpi = 600)
+    }
   }
 }
 
